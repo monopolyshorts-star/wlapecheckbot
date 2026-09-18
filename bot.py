@@ -16,17 +16,15 @@ from aiogram.types import (
 
 from database import DB_NAME, init_db
 
-TOKEN = os.getenv("BOT_TOKEN")
+TOKEN = os.getenv("BOT_TOKEN", "8480773029:AAGO1I2nYPGc8agez0UJziFm1qx0YBEUGAo")
 ADMIN_IDS = {1321937398}
-
-if not TOKEN:
-    raise RuntimeError("Environment variable BOT_TOKEN is not set")
 
 init_db()
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
 logging.basicConfig(level=logging.INFO)
 
+# Точное соответствие названий сезонов из игры со значками из ТЗ
 SEASON_ICONS = {
     "Мотогонки": "🏍",
     "Ловля по инфе": "📱",
@@ -94,14 +92,25 @@ def main_keyboard():
     )
 
 
-def status_text(status):
+def status_name(value):
     return {
         "Страх": "Застраховано",
         "Нестрах": "Не застраховано",
         "Страх, Занят": "Застраховано, есть занятость",
         "Страх, Незанят": "Застраховано, нет занятости",
         "Нестрах, Незанят": "Не застраховано, нет занятости",
-    }.get(status or "", "Застраховано")
+    }.get(value or "", "Застраховано")
+
+
+def get_season_icon(season_name):
+    if not season_name:
+        return "🌐"
+    # Ищем соответствие без учета регистра и возможных пробелов
+    s_clean = season_name.strip()
+    for key, icon in SEASON_ICONS.items():
+        if key.lower() in s_clean.lower():
+            return icon
+    return "🌐"
 
 
 def fetch_rows(where="", params=()):
@@ -158,9 +167,9 @@ def format_falls(rows, title):
             result.append(f"🕰️ <b>Слёты в {hour}:</b> 🕰️")
             shown_hour = hour
 
+        icon_emoji = get_season_icon(season)
         result.append(
-            f"   └─🌐 <b>Сервер {server_name.upper()} "
-            f"{SEASON_ICONS.get(season, '🌐')}</b>"
+            f"   └─🌐 <b>Сервер {server_name.upper()} {icon_emoji}</b>"
         )
 
         for obj_type, objects in groups.items():
@@ -186,7 +195,7 @@ def format_falls(rows, title):
                     is_estate,
                 ) = row
 
-                info = status_text(status)
+                info = status_name(status)
                 if is_estate:
                     info += " (🔒 С поместьем)"
                 if is_h2:
@@ -439,13 +448,14 @@ async def status(message: types.Message):
         return
 
     conn = db()
+    # Сортировка по убыванию: свежие сканы (по реальной дате/времени) сверху, старые — снизу
     rows = conn.execute(
         "SELECT server_name, MAX(last_updated) "
-        "FROM server_objects GROUP BY server_id"
+        "FROM server_objects GROUP BY server_id "
+        "ORDER BY MAX(datetime(substr(last_updated,7,4)||'-'||substr(last_updated,4,2)||'-'||substr(last_updated,1,2)||' '||substr(last_updated,12))) DESC"
     ).fetchall()
     conn.close()
 
-    rows.sort(key=lambda row: row[1] or "", reverse=True)
     if not rows:
         await message.answer("📍 Данных о сканировании пока нет.")
         return
@@ -506,7 +516,7 @@ async def season_result(callback: types.CallbackQuery):
         "season = ? AND is_frozen = 0",
         (season,),
     )
-    await callback.message.answer(
+    await message.answer(
         format_falls(rows, f"🏆 <b>Сезон: {season}</b>"),
         parse_mode="HTML",
     )
