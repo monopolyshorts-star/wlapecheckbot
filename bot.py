@@ -7,7 +7,7 @@ from aiogram.filters import Command
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton
 from database import DB_NAME
 
-TOKEN = "ВАШ_ТОКЕН_БОТА_ОТ_BOTFATHER"
+TOKEN = "8480773029:AAGO1I2nYPGc8agez0UJziFm1qx0YBEUGAo"
 ADMIN_IDS = [123456789] # <-- Впишите сюда СВОЙ числовой Telegram ID (чтобы быть админом)
 
 bot = Bot(token=TOKEN)
