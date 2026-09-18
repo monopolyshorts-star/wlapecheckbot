@@ -1,6 +1,6 @@
 import sqlite3
 from datetime import datetime, timedelta
-from typing import List, Optional
+from typing import List, Optional, Any
 from fastapi import FastAPI
 from pydantic import BaseModel
 from database import DB_NAME, init_db
@@ -11,13 +11,13 @@ init_db()
 class RealtorItem(BaseModel):
     slot: int
     payday: int
-    type: str  # "Дом" или "Бизнес"
-    state: Optional[str] = None # "Страх", "Нестрах" и т.д.
+    type: str
+    state: Optional[str] = None
 
 class RealtorPayload(BaseModel):
-    server_id: str
+    server_id: Any  # Принимает и текст, и цифры
     server_name: str
-    season: str
+    season: Optional[str] = "Неизвестно"
     items: List[RealtorItem]
 
 def calculate_fall_time(payday_val, insurance_status, update_time):
