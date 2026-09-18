@@ -9,41 +9,41 @@ from database import DB_NAME, init_db
 app = FastAPI(title="Arizona Tracker API")
 init_db()
 
-# Полные правила слётов (Страх, Нестрах макс)
+# Полные правила слётов по ТЗ (Целевой PayDay для падения: (Страх, Нестрах))
 SERVER_RULES = {
-    "phoenix":     {"house": (2, 3), "biz": (2, 3)},
-    "tucson":      {"house": (2, 3), "biz": (2, 2)},
-    "scottdale":   {"house": (2, 3), "biz": (1, 2)},
-    "chandler":    {"house": (2, 3), "biz": (1, 2)},
-    "brainburg":   {"house": (2, 3), "biz": (2, 2)},
-    "saintrose":   {"house": (2, 3), "biz": (2, 3)},
-    "mesa":        {"house": (2, 3), "biz": (2, 2)},
-    "redrock":     {"house": (2, 3), "biz": (1, 2)},
-    "yuma":        {"house": (2, 3), "biz": (2, 3)},
-    "surprise":    {"house": (2, 3), "biz": (2, 2)},
-    "prescott":    {"house": (2, 3), "biz": (2, 2)},
-    "glendale":    {"house": (2, 3), "biz": (1, 2)},
-    "kingman":     {"house": (2, 3), "biz": (2, 3)},
-    "winslow":     {"house": (2, 3), "biz": (1, 2)},
-    "payson":      {"house": (1, 2), "biz": (1, 2)},
-    "gilbert":     {"house": (2, 3), "biz": (1, 2)},
-    "showlow":     {"house": (1, 2), "biz": (1, 2)},
-    "casagrande":  {"house": (2, 3), "biz": (2, 3)},
-    "page":        {"house": (2, 3), "biz": (2, 2)},
-    "suncity":     {"house": (1, 2), "biz": (1, 2)},
-    "queencreek":  {"house": (2, 3), "biz": (2, 2)},
-    "sedona":      {"house": (2, 3), "biz": (1, 2)},
-    "holiday":     {"house": (2, 3), "biz": (2, 2)},
-    "wednesday":   {"house": (2, 3), "biz": (1, 2)},
-    "yava":        {"house": (2, 3), "biz": (1, 2)},
-    "faraway":     {"house": (1, 2), "biz": (2, 3)},
-    "bumblebee":   {"house": (1, 2), "biz": (1, 2)},
-    "christmas":   {"house": (2, 3), "biz": (2, 3)},
-    "mirage":      {"house": (2, 3), "biz": (2, 3)},
-    "love":        {"house": (1, 2), "biz": (2, 3)},
-    "drake":       {"house": (2, 3), "biz": (1, 2)},
-    "space":       {"house": (1, 2), "biz": (2, 2)},
-    "home":        {"house": (1, 2), "biz": (2, 2)}
+    "phoenix":     {"house": (2, 2), "biz": (2, 2)},
+    "tucson":      {"house": (2, 2), "biz": (2, 1)},
+    "scottdale":   {"house": (2, 2), "biz": (1, 1)},
+    "chandler":    {"house": (2, 2), "biz": (1, 1)},
+    "brainburg":   {"house": (2, 2), "biz": (2, 1)},
+    "saintrose":   {"house": (2, 2), "biz": (2, 2)},
+    "mesa":        {"house": (2, 2), "biz": (2, 1)},
+    "redrock":     {"house": (2, 2), "biz": (1, 1)},
+    "yuma":        {"house": (2, 2), "biz": (2, 2)},
+    "surprise":    {"house": (2, 2), "biz": (2, 1)},
+    "prescott":    {"house": (2, 2), "biz": (2, 1)},
+    "glendale":    {"house": (2, 2), "biz": (1, 1)},
+    "kingman":     {"house": (2, 2), "biz": (2, 2)},
+    "winslow":     {"house": (2, 2), "biz": (1, 1)},
+    "payson":      {"house": (1, 1), "biz": (1, 1)},
+    "gilbert":     {"house": (2, 2), "biz": (1, 1)},
+    "showlow":     {"house": (1, 1), "biz": (1, 1)},
+    "casagrande":  {"house": (2, 2), "biz": (2, 2)},
+    "page":        {"house": (2, 2), "biz": (2, 1)},
+    "suncity":     {"house": (1, 1), "biz": (1, 1)},
+    "queencreek":  {"house": (2, 2), "biz": (2, 1)},
+    "sedona":      {"house": (2, 2), "biz": (1, 1)},
+    "holiday":     {"house": (2, 2), "biz": (2, 1)},
+    "wednesday":   {"house": (2, 2), "biz": (1, 1)},
+    "yava":        {"house": (2, 2), "biz": (1, 1)},
+    "faraway":     {"house": (1, 1), "biz": (2, 2)},
+    "bumblebee":   {"house": (1, 1), "biz": (1, 1)},
+    "christmas":   {"house": (2, 2), "biz": (2, 2)},
+    "mirage":      {"house": (2, 2), "biz": (2, 2)},
+    "love":        {"house": (1, 1), "biz": (2, 2)},
+    "drake":       {"house": (2, 2), "biz": (1, 1)},
+    "space":       {"house": (1, 1), "biz": (2, 1)},
+    "home":        {"house": (1, 1), "biz": (2, 1)}
 }
 
 class RealtorItem(BaseModel):
@@ -56,6 +56,7 @@ class RealtorPayload(BaseModel):
     server_id: Any
     server_name: str
     season: Optional[str] = "Неизвестно"
+    scan_ts: Optional[float] = None
     items: List[RealtorItem]
 
 def get_clean_key(name: str) -> str:
@@ -63,29 +64,27 @@ def get_clean_key(name: str) -> str:
 
 def calculate_fall_time(server_name: str, obj_type: str, payday_val: int, insurance_status: str, update_time: datetime, is_h2: bool = False):
     try:
-        # Ближайший payday — следующий час (00 минут)
+        # Следующий PayDay — это всегда начало ближайшего следующего часа (00 минут)
         next_payday = (update_time + timedelta(hours=1)).replace(minute=0, second=0, microsecond=0)
         is_biz = (obj_type == "Бизнес")
         s_key = get_clean_key(server_name)
-        rules = SERVER_RULES.get(s_key, {"house": (2, 3), "biz": (2, 2)})
+        rules = SERVER_RULES.get(s_key, {"house": (2, 2), "biz": (2, 1)})
         
-        # Специфический кейс из ТЗ: бизнес отнимается по -4 (нестрахованный и без занятости -> падает при 4 PD)
-        if is_biz and payday_val == 4 and "Нестрах" in str(insurance_status):
+        # Специфический кейс ТЗ: бизнес без страховки и без занятости (падает при 4 PD)
+        if is_biz and payday_val == 4 and insurance_status and "Нестрах" in insurance_status:
             hours_to_add = 0
         else:
-            # Правильный расчет: если статус Неизвестно или Страх -> берем правило страховки (-1)
-            # Если Нестрах -> делим на 2 (или берем округление) минус 1
+            # Определяем целевой PayDay падения из правил (если неизвестно — считаем по страховке)
             is_insured = True
             if insurance_status and "Нестрах" in insurance_status:
                 is_insured = False
                 
-            fall_pd = rules["biz"][0] if is_biz else rules["house"][0]
+            target_pd = rules["biz"][0] if is_biz else rules["house"][0]
             if not is_insured:
-                fall_pd = rules["biz"][1] if is_biz else rules["house"][1]
+                target_pd = rules["biz"][1] if is_biz else rules["house"][1]
                 
-            # Объект упадет, когда дойдет до fall_pd (обычно 1 или 2 payday)
-            # Формула: (Текущие PayDay - Целевой PayDay для слета)
-            hours_to_add = max(0, payday_val - fall_pd)
+            # Часов до падения = разница между текущим PayDay и целевым
+            hours_to_add = max(0, payday_val - target_pd)
             
         if is_h2:
             hours_to_add = hours_to_add * 2
@@ -100,7 +99,13 @@ def calculate_fall_time(server_name: str, obj_type: str, payday_val: int, insura
 async def update_objects(payload: RealtorPayload):
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
-    now = datetime.now()
+    
+    # Используем время отправки из игры (scan_ts), чтобы избежать рассинхрона часовых поясов сервера (UTC/MSK)
+    if payload.scan_ts:
+        now = datetime.fromtimestamp(payload.scan_ts)
+    else:
+        now = datetime.now()
+        
     now_str = now.strftime("%d.%m.%Y %H:%M:%S")
 
     for item in payload.items:
