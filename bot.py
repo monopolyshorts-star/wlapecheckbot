@@ -8,7 +8,7 @@ from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeybo
 from database import DB_NAME
 
 TOKEN = "8480773029:AAGO1I2nYPGc8agez0UJziFm1qx0YBEUGAo"
-ADMIN_IDS = [123456789] # <-- Впишите сюда СВОЙ числовой Telegram ID (чтобы быть админом)
+ADMIN_IDS = [1321937398] # <-- Впишите сюда СВОЙ числовой Telegram ID (чтобы быть админом)
 
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
