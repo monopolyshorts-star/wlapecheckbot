@@ -10,8 +10,8 @@ from aiogram.filters import Command
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton
 from database import DB_NAME, init_db
 
-TOKEN = "ВАШ_ТОКЕН"
-ADMIN_IDS = {123456789} # Сюда ваш ID
+TOKEN = "8480773029:AAGO1I2nYPGc8agez0UJziFm1qx0YBEUGAo"
+ADMIN_IDS = {1321937398} # Сюда ваш ID
 
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
