@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import sqlite3
+import secrets
 import os
 from datetime import datetime, timedelta
 from aiogram import Bot, Dispatcher, F, types
@@ -35,7 +36,10 @@ def has_access(user_id: int) -> bool:
     row = conn.execute("SELECT expires_at FROM allowed_users WHERE user_id = ?", (user_id,)).fetchone()
     conn.close()
     if not row: return False
-    return datetime.fromisoformat(row[0]) > datetime.now()
+    try:
+        return datetime.fromisoformat(row[0]) > datetime.now()
+    except:
+        return False
 
 def main_keyboard():
     return ReplyKeyboardMarkup(keyboard=[
@@ -51,7 +55,7 @@ def status_text(status):
         "Страх, Занят": "Застраховано, есть занятость",
         "Страх, Незанят": "Застраховано, нет занятости",
         "Нестрах, Незанят": "Не застраховано, нет занятости",
-    }.get(status or "", "Неизвестно")
+    }.get(status or "", "Застраховано") # По ТЗ неизвестно считаем застрахованным
 
 def format_falls(rows, title):
     if not rows: return f"{title}\n\nСлётов не обнаружено."
@@ -70,7 +74,8 @@ def format_falls(rows, title):
         for kind, items in types.items():
             if not items: continue
             icon = "🏠" if kind == "Дом" else "✨"
-            result.append(f"      └─{icon} <b>{kind}а:</b>")
+            label = "Дома" if kind == "Дом" else "Бизнесы"
+            result.append(f"      └─{icon} <b>{label}:</b>")
             for r in items:
                 _, _, _, _, slot, payday, status, _, _, h2, estate = r
                 info = status_text(status)
@@ -83,9 +88,51 @@ def format_falls(rows, title):
 @dp.message(Command("start"))
 async def start(message: types.Message):
     if not has_access(message.from_user.id):
-        await message.answer("🔒 Нет доступа.")
+        await message.answer("🔒 У вас нет доступа к боту.")
         return
     await message.answer("👋 <b>Arizona Tracker</b>", reply_markup=main_keyboard(), parse_mode="HTML")
+
+# Команда для генерации ключа админом: /genkey ДНИ (например /genkey 30)
+@dp.message(Command("genkey"))
+async def genkey(message: types.Message):
+    if message.from_user.id not in ADMIN_IDS: return
+    try:
+        days = int(message.text.split()[1])
+        key = secrets.token_hex(4).upper() # Генерирует короткий код типа A3F9B2C1
+        exp = (datetime.now() + timedelta(days=days)).isoformat()
+        conn = db()
+        conn.execute("INSERT INTO access_keys(key, expires_at, created_at, created_by) VALUES (?, ?, ?, ?)", 
+                     (key, exp, datetime.now().isoformat(), message.from_user.id))
+        conn.commit(); conn.close()
+        await message.answer(f"🔑 Сгенерирован ключ на <b>{days} дн.</b>:\n<code>{key}</code>\n\nИгрок может активировать его командой:\n<code>/key {key}</code>", parse_mode="HTML")
+    except Exception as e:
+        await message.answer("Использование: /genkey <количество_дней>")
+
+# Команда для активации ключа игроком: /key КЛЮЧ
+@dp.message(Command("key"))
+async def activate_key(message: types.Message):
+    args = message.text.split()
+    if len(args) < 2:
+        await message.answer("Использование: /key <ваш_ключ>")
+        return
+    key = args[1].strip().upper()
+    conn = db()
+    row = conn.execute("SELECT expires_at, used FROM access_keys WHERE key = ?", (key,)).fetchone()
+    if not row:
+        conn.close()
+        await message.answer("❌ Ключ не найден.")
+        return
+    exp, used = row
+    if used:
+        conn.close()
+        await message.answer("❌ Этот ключ уже был использован.")
+        return
+    
+    conn.execute("UPDATE access_keys SET used = 1, used_by = ? WHERE key = ?", (message.from_user.id, key))
+    conn.execute("INSERT OR REPLACE INTO allowed_users(user_id, username, expires_at, added_at) VALUES (?, ?, ?, ?)", 
+                 (message.from_user.id, message.from_user.username or "", exp, datetime.now().isoformat()))
+    conn.commit(); conn.close()
+    await message.answer(f"✅ Подписка успешно активирована до <b>{datetime.fromisoformat(exp).strftime('%d.%m.%Y %H:%M')}</b>!", parse_mode="HTML", reply_markup=main_keyboard())
 
 @dp.message(Command("grant"))
 async def grant(message: types.Message):
@@ -96,8 +143,8 @@ async def grant(message: types.Message):
         conn = db()
         conn.execute("INSERT OR REPLACE INTO allowed_users VALUES (?, ?, ?, ?)", (int(uid), "", exp, datetime.now().isoformat()))
         conn.commit(); conn.close()
-        await message.answer(f"✅ Доступ выдан до {exp}")
-    except: await message.answer("Ошибка. Юзай: /grant ID ДНИ")
+        await message.answer(f"✅ Доступ напрямую выдан ID {uid} до {exp}")
+    except: await message.answer("Ошибка. Использование: /grant USER_ID ДНИ")
 
 @dp.message(Command("revoke"))
 async def revoke(message: types.Message):
@@ -105,8 +152,8 @@ async def revoke(message: types.Message):
     try:
         uid = message.text.split()[1]
         conn = db(); conn.execute("DELETE FROM allowed_users WHERE user_id = ?", (int(uid),)); conn.commit(); conn.close()
-        await message.answer("✅ Доступ отозван.")
-    except: pass
+        await message.answer(f"✅ Подписка у пользователя {uid} аннулирована.")
+    except: await message.answer("Использование: /revoke USER_ID")
 
 @dp.message(F.text == "⚠️ Ближайшие")
 async def nearest(message: types.Message):
@@ -118,7 +165,7 @@ async def nearest(message: types.Message):
     if not rows:
         await message.answer("⚠️ В ближайшие 3 часа слётов не обнаружено.", parse_mode="HTML")
         return
-    await message.answer(format_falls(rows, "⚠️ <b>Ближайшие слёты</b>"), parse_mode="HTML")
+    await message.answer(format_falls(rows, "⚠️ <b>Ближайшие слёты (3 ПД)</b>"), parse_mode="HTML")
 
 @dp.message(F.text == "📋 Все слёты")
 async def all_falls(message: types.Message):
@@ -130,7 +177,7 @@ async def all_falls(message: types.Message):
     if not rows:
         await message.answer("📋 На ближайшие 24 часа слётов не обнаружено.", parse_mode="HTML")
         return
-    await message.answer(format_falls(rows, "📋 <b>Слёты за 24 часа</b>"), parse_mode="HTML")
+    await message.answer(format_falls(rows, "📋 <b>Все слёты за 24 часа</b>"), parse_mode="HTML")
 
 @dp.message(F.text == "🌐 По серверу")
 async def servers_menu(message: types.Message):
@@ -164,7 +211,6 @@ async def srv_res(cb: types.CallbackQuery):
 async def status(message: types.Message):
     if not has_access(message.from_user.id): return
     conn = db()
-    # Сортировка по убыванию последнего сканирования (свежие сверху, старые снизу)
     rows = conn.execute("SELECT server_name, MAX(last_updated) FROM server_objects GROUP BY server_id ORDER BY MAX(datetime(substr(last_updated,7,4)||'-'||substr(last_updated,4,2)||'-'||substr(last_updated,1,2)||' '||substr(last_updated,12))) DESC").fetchall()
     conn.close()
     if not rows:
@@ -172,7 +218,7 @@ async def status(message: types.Message):
         return
     lines = ["📍 <b>Последние сейвы по серверам:</b>", ""]
     for name, val in rows:
-        lines.append(f"<code>{name:<12} | {val}</code>")
+        lines.append(f"<code>{name:<14} | {val}</code>")
     await message.answer("\n".join(lines), parse_mode="HTML")
 
 @dp.message(F.text == "😴 Стоит проснуться")
@@ -196,7 +242,7 @@ async def wakeup(message: types.Message):
 @dp.message(F.text == "🏆 Поиск по сезону")
 async def season_menu(message: types.Message):
     if not has_access(message.from_user.id): return
-    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text=s, callback_data=f"s:{s}")] for s in SEASONS])
+    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text=s, callback_data=f`s:{s}`)] for s in SEASONS])
     await message.answer("🏆 Выберите сезон:", reply_markup=kb)
 
 @dp.callback_query(F.data.startswith("s:"))
