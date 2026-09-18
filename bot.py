@@ -16,7 +16,7 @@ from aiogram.types import (
 
 from database import DB_NAME, init_db
 
-TOKEN = os.getenv("8480773029:AAGO1I2nYPGc8agez0UJziFm1qx0YBEUGAo")
+TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_IDS = {1321937398}
 
 if not TOKEN:
