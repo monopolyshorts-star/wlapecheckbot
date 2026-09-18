@@ -1,34 +1,25 @@
 import asyncio
 import logging
+import os
 import uvicorn
-from fastapi import FastAPI
-from aiogram import Bot, Dispatcher
 from database import init_db
+from server import app
+from bot import dp, bot
 
-# Импортируем роутеры и логику (предполагаем, что они в тех же файлах)
-from server import app as fastapi_app
-from bot import dp, bot, TOKEN
+logging.basicConfig(level=logging.INFO)
 
-async def run_bot():
-    logging.info("Запуск Telegram бота...")
-    await dp.start_polling(bot)
-
-async def run_server():
-    config = uvicorn.Config(fastapi_app, host="0.0.0.0", port=10000, log_level="info")
+async def run_api():
+    port = int(os.getenv("PORT", "10000"))
+    config = uvicorn.Config(app, host="0.0.0.0", port=port, log_level="info")
     server = uvicorn.Server(config)
-    logging.info("Запуск API сервера на порту 10000...")
     await server.serve()
 
+async def run_bot():
+    await dp.start_polling(bot)
+
 async def main():
-    # Инициализируем базу данных при старте
     init_db()
-    
-    # Запускаем бота и сервер одновременно
-    await asyncio.gather(
-        run_server(),
-        run_bot()
-    )
+    await asyncio.gather(run_api(), run_bot())
 
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO)
     asyncio.run(main())
