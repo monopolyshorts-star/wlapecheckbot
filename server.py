@@ -90,6 +90,7 @@ async def update_objects(payload: RealtorPayload):
         active_season = m_season[0] if m_season and m_season[0] else payload.season
 
         for item in payload.items:
+            # 1. Сначала ищем по точному слоту
             cursor.execute("""
                 SELECT payday, recorded_at FROM scan_history
                 WHERE server_id = ? AND slot = ? AND obj_type = ?
@@ -97,40 +98,57 @@ async def update_objects(payload: RealtorPayload):
             """, (str(payload.server_id), item.slot, item.type))
             old_rec = cursor.fetchone()
 
+            # 2. Если по точной позиции дом не подходит (например, список сдвинулся),
+            # ищем запись из прошлого скана с близким PayDay (+1, +2 или +4)
+            if not old_rec or (old_rec and (old_rec[0] - item.payday) <= 0):
+                cursor.execute("""
+                    SELECT payday, recorded_at FROM scan_history
+                    WHERE server_id = ? AND obj_type = ? AND payday IN (?, ?, ?, ?)
+                    ORDER BY id DESC LIMIT 1
+                """, (str(payload.server_id), item.type, item.payday + 1, item.payday + 2, item.payday + 3, item.payday + 4))
+                shift_match = cursor.fetchone()
+                if shift_match:
+                    old_rec = shift_match
+
             insurance = item.state
 
             if not old_rec:
                 insurance = "Неизвестно"
-            elif not insurance:
+            elif not insurance or insurance == "Неизвестно":
                 old_pd, old_time_str = old_rec
                 try:
                     old_time = datetime.strptime(old_time_str, "%d.%m.%Y %H:%M:%S")
-                    hours_diff = max(1, int((now - old_time).total_seconds() / 3600))
-                    pd_diff = old_pd - item.payday
-                    drop_speed = pd_diff / hours_diff
+                    time_delta_sec = (now - old_time).total_seconds()
                     
-                    if item.type == "Бизнес":
-                        if drop_speed >= 3.5:
-                            insurance = "Нестрах, Без занятости"
-                        elif drop_speed >= 1.8 and drop_speed <= 2.2:
-                            insurance = "Страх, Незанят"
-                        elif drop_speed >= 0.8 and drop_speed <= 1.2:
-                            insurance = "Страх, Занят"
+                    # Если между сканами прошло хотя бы 20 минут
+                    hours_diff = max(1.0, round(time_delta_sec / 3600.0))
+                    pd_diff = old_pd - item.payday
+                    
+                    if pd_diff > 0:
+                        drop_speed = pd_diff / hours_diff
+                        
+                        if item.type == "Бизнес":
+                            if drop_speed >= 3.0:
+                                insurance = "Нестрах, Без занятости"
+                            elif drop_speed >= 1.5:
+                                insurance = "Страх, Незанят"
+                            else:
+                                insurance = "Страх, Занят"
                         else:
-                            insurance = "Неизвестно"
+                            # Для домов: если отнялось 2 или больше за час -> Нестрах, если 1 -> Страх
+                            if drop_speed >= 1.5:
+                                insurance = "Нестрах"
+                            else:
+                                insurance = "Страх"
                     else:
-                        if drop_speed >= 1.5:
-                            insurance = "Нестрах"
-                        elif drop_speed > 0:
-                            insurance = "Страх"
-                        else:
-                            insurance = "Неизвестно"
-                except:
+                        insurance = "Неизвестно"
+                except Exception as ex:
+                    print(f"[Diff Calc Error] {ex}", flush=True)
                     insurance = "Неизвестно"
 
             fall_time = calculate_fall_time(item.type, item.payday, insurance, now)
 
-            # Ровно 13 колонок и ровно 13 значений (10 параметров + 3 нуля)
+            # Сохраняем в таблицу объектов
             cursor.execute("""
                 INSERT INTO server_objects (
                     server_id, server_name, season, obj_type, slot, house_id, 
@@ -153,6 +171,7 @@ async def update_objects(payload: RealtorPayload):
                 fall_time, now_str
             ))
 
+            # Записываем скан в историю
             cursor.execute("""
                 INSERT INTO scan_history (server_id, slot, obj_type, payday, recorded_at)
                 VALUES (?, ?, ?, ?, ?)
