@@ -3,7 +3,7 @@ import logging
 import os
 import secrets
 import sqlite3
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from aiogram import Bot, Dispatcher, F, types
 from aiogram.filters import Command
@@ -16,23 +16,13 @@ from aiogram.types import (
 
 from database import DB_NAME, init_db
 
-TOKEN = os.getenv("BOT_TOKEN")
+TOKEN = "8480773029:AAGO1I2nYPGc8agez0UJziFm1qx0YBEUGAo"
 ADMIN_IDS = {1321937398}
 
 init_db()
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
 logging.basicConfig(level=logging.INFO)
-
-# Точное соответствие названий сезонов из игры со значками из ТЗ
-SEASON_ICONS = {
-    "Мотогонки": "🏍",
-    "Ловля по инфе": "📱",
-    "По инфе": "📱",
-    "По новому": "✈️",
-    "Автогонки": "🚗",
-    "Скорострелы": "⌨️",
-}
 
 SEASONS = [
     "Скорострелы",
@@ -41,6 +31,14 @@ SEASONS = [
     "По новому",
     "Мотогонки",
 ]
+SEASON_ICONS = {
+    "Мотогонки": "🏍",
+    "Ловля по инфе": "📱",
+    "По инфе": "📱",
+    "По новому": "✈️",
+    "Автогонки": "🚗",
+    "Скорострелы": "⌨️",
+}
 
 SELECT_COLUMNS = (
     "server_name, server_id, season, obj_type, slot, payday, "
@@ -72,7 +70,7 @@ def has_access(user_id: int) -> bool:
         return False
 
 
-def main_keyboard():
+def keyboard():
     return ReplyKeyboardMarkup(
         keyboard=[
             [
@@ -105,10 +103,19 @@ def status_name(value):
 def get_season_icon(season_name):
     if not season_name:
         return "🌐"
-    # Ищем соответствие без учета регистра и возможных пробелов
-    s_clean = season_name.strip()
+    s = season_name.strip().lower()
+    if "мото" in s or "moto" in s:
+        return "🏍"
+    if "инф" in s or "info" in s:
+        return "📱"
+    if "нов" in s or "new" in s:
+        return "✈️"
+    if "авто" in s or "гонк" in s:
+        return "🚗"
+    if "скорост" in s:
+        return "⌨️"
     for key, icon in SEASON_ICONS.items():
-        if key.lower() in s_clean.lower():
+        if key.lower() in s:
             return icon
     return "🌐"
 
@@ -198,8 +205,6 @@ def format_falls(rows, title):
                 info = status_name(status)
                 if is_estate:
                     info += " (🔒 С поместьем)"
-                if is_h2:
-                    info += " (🔒 Х2 ДОМ!!!)"
 
                 result.append(
                     f"         └─pos {slot} "
@@ -216,10 +221,9 @@ async def start(message: types.Message):
     if not has_access(message.from_user.id):
         await message.answer("🔒 У вас нет доступа к боту.")
         return
-
     await message.answer(
         "👋 <b>Arizona Tracker</b>",
-        reply_markup=main_keyboard(),
+        reply_markup=keyboard(),
         parse_mode="HTML",
     )
 
@@ -228,29 +232,22 @@ async def start(message: types.Message):
 async def genkey(message: types.Message):
     if message.from_user.id not in ADMIN_IDS:
         return
-
     args = message.text.split()
     if len(args) != 2 or not args[1].isdigit() or int(args[1]) <= 0:
         await message.answer("Использование: /genkey КОЛИЧЕСТВО_ДНЕЙ")
         return
-
     days = int(args[1])
     key = secrets.token_hex(4).upper()
     expires = datetime.now() + timedelta(days=days)
-
-    conn = db()
-    conn.execute(
-        "INSERT INTO access_keys "
-        "(key, expires_at, created_at, created_by) VALUES (?, ?, ?, ?)",
+    con = db()
+    con.execute(
+        "INSERT INTO access_keys (key, expires_at, created_at, created_by) VALUES (?, ?, ?, ?)",
         (key, expires.isoformat(), datetime.now().isoformat(), message.from_user.id),
     )
-    conn.commit()
-    conn.close()
-
+    con.commit()
+    con.close()
     await message.answer(
-        f"🔑 Ключ на <b>{days} дн.</b>:\n"
-        f"<code>{key}</code>\n\n"
-        f"Активация: <code>/key {key}</code>",
+        f"🔑 Ключ на <b>{days} дн.</b>:\n<code>{key}</code>\n\nАктивация: <code>/key {key}</code>",
         parse_mode="HTML",
     )
 
@@ -261,37 +258,26 @@ async def activate_key(message: types.Message):
     if len(args) != 2:
         await message.answer("Использование: /key КЛЮЧ")
         return
-
     key = args[1].strip().upper()
-    conn = db()
-    row = conn.execute(
-        "SELECT expires_at, used FROM access_keys WHERE key = ?",
-        (key,),
+    con = db()
+    row = con.execute(
+        "SELECT expires_at, used FROM access_keys WHERE key = ?", (key,)
     ).fetchone()
-
     if not row:
-        conn.close()
+        con.close()
         await message.answer("❌ Ключ не найден.")
         return
-
     expires_at, used = row
-    if used:
-        conn.close()
-        await message.answer("❌ Этот ключ уже использован.")
+    if used or datetime.fromisoformat(expires_at) <= datetime.now():
+        con.close()
+        await message.answer("❌ Ключ уже использован или истёк.")
         return
-
-    if datetime.fromisoformat(expires_at) <= datetime.now():
-        conn.close()
-        await message.answer("❌ Срок действия ключа истёк.")
-        return
-
-    conn.execute(
+    con.execute(
         "UPDATE access_keys SET used = 1, used_by = ? WHERE key = ?",
         (message.from_user.id, key),
     )
-    conn.execute(
-        "INSERT OR REPLACE INTO allowed_users "
-        "(user_id, username, expires_at, added_at) VALUES (?, ?, ?, ?)",
+    con.execute(
+        "INSERT OR REPLACE INTO allowed_users (user_id, username, expires_at, added_at) VALUES (?, ?, ?, ?)",
         (
             message.from_user.id,
             message.from_user.username or "",
@@ -299,42 +285,32 @@ async def activate_key(message: types.Message):
             datetime.now().isoformat(),
         ),
     )
-    conn.commit()
-    conn.close()
-
-    await message.answer(
-        "✅ Подписка активирована.",
-        reply_markup=main_keyboard(),
-    )
+    con.commit()
+    con.close()
+    await message.answer("✅ Подписка активирована.", reply_markup=keyboard())
 
 
 @dp.message(Command("grant"))
 async def grant(message: types.Message):
     if message.from_user.id not in ADMIN_IDS:
         return
-
     args = message.text.split()
     if len(args) != 3:
         await message.answer("Использование: /grant USER_ID ДНИ")
         return
-
     try:
-        user_id = int(args[1])
-        days = int(args[2])
+        user_id, days = int(args[1]), int(args[2])
     except ValueError:
         await message.answer("USER_ID и ДНИ должны быть числами.")
         return
-
     expires = datetime.now() + timedelta(days=days)
-    conn = db()
-    conn.execute(
-        "INSERT OR REPLACE INTO allowed_users "
-        "(user_id, username, expires_at, added_at) VALUES (?, ?, ?, ?)",
+    con = db()
+    con.execute(
+        "INSERT OR REPLACE INTO allowed_users (user_id, username, expires_at, added_at) VALUES (?, ?, ?, ?)",
         (user_id, "", expires.isoformat(), datetime.now().isoformat()),
     )
-    conn.commit()
-    conn.close()
-
+    con.commit()
+    con.close()
     await message.answer(f"✅ Доступ выдан до {expires:%d.%m.%Y %H:%M}.")
 
 
@@ -342,29 +318,32 @@ async def grant(message: types.Message):
 async def revoke(message: types.Message):
     if message.from_user.id not in ADMIN_IDS:
         return
-
     args = message.text.split()
     if len(args) != 2 or not args[1].isdigit():
         await message.answer("Использование: /revoke USER_ID")
         return
-
-    conn = db()
-    conn.execute("DELETE FROM allowed_users WHERE user_id = ?", (int(args[1]),))
-    conn.commit()
-    conn.close()
-
+    con = db()
+    con.execute("DELETE FROM allowed_users WHERE user_id = ?", (int(args[1]),))
+    con.commit()
+    con.close()
     await message.answer("✅ Подписка отозвана.")
 
 
-@dp.message(F.text == "⚠️ Ближайшие слёты")
+@dp.message(F.text.in_({"⚠️ Ближайшие слёты", "Ближайшие слёты", "⚠️ Ближайшие"}))
 async def nearest(message: types.Message):
     if not has_access(message.from_user.id):
         return
-
-    now = datetime.now()
+    # Считаем текущее время по МСК (UTC+3)
+    now = (
+        datetime.now(timezone.utc) + timedelta(hours=3)
+    ).replace(tzinfo=None)
+    
+    # Чтобы захватить слёты на ближайшие 3 часа (например, если сейчас 7:00, захватываем слёты до 10:00 включительно)
+    limit = now + timedelta(hours=3)
+    
     rows = fetch_rows(
         "is_frozen = 0 AND exact_fall_time BETWEEN ? AND ?",
-        (now.isoformat(), (now + timedelta(hours=3)).isoformat()),
+        (now.isoformat(), limit.isoformat()),
     )
     await message.answer(
         format_falls(rows, "⚠️ <b>Ближайшие слёты (3 ПД)</b>"),
@@ -372,12 +351,13 @@ async def nearest(message: types.Message):
     )
 
 
-@dp.message(F.text == "📋 Все слёты")
+@dp.message(F.text.in_({"📋 Все слёты", "Все слёты"}))
 async def all_falls(message: types.Message):
     if not has_access(message.from_user.id):
         return
-
-    now = datetime.now()
+    now = (
+        datetime.now(timezone.utc) + timedelta(hours=3)
+    ).replace(tzinfo=None)
     rows = fetch_rows(
         "is_frozen = 0 AND exact_fall_time BETWEEN ? AND ?",
         (now.isoformat(), (now + timedelta(hours=24)).isoformat()),
@@ -388,22 +368,18 @@ async def all_falls(message: types.Message):
     )
 
 
-@dp.message(F.text == "🌐 По серверу")
+@dp.message(F.text.in_({"🌐 По серверу", "По серверу"}))
 async def servers_menu(message: types.Message):
     if not has_access(message.from_user.id):
         return
-
-    conn = db()
-    servers = conn.execute(
-        "SELECT DISTINCT server_id, server_name "
-        "FROM server_objects ORDER BY server_name"
+    con = db()
+    servers = con.execute(
+        "SELECT DISTINCT server_id, server_name FROM server_objects ORDER BY server_name"
     ).fetchall()
-    conn.close()
-
+    con.close()
     if not servers:
         await message.answer("⚠️ В базе пока нет данных по серверам.")
         return
-
     buttons = [
         [
             InlineKeyboardButton(
@@ -424,77 +400,61 @@ async def server_result(callback: types.CallbackQuery):
     if not has_access(callback.from_user.id):
         await callback.answer("Нет доступа", show_alert=True)
         return
-
     server_id = callback.data.split(":", 1)[1]
-    rows = fetch_rows(
-        "server_id = ? AND is_frozen = 0",
-        (server_id,),
-    )
-
+    rows = fetch_rows("server_id = ? AND is_frozen = 0", (server_id,))
     if not rows:
         await callback.message.answer("⚠️ На этом сервере нет активных слётов.")
     else:
         await callback.message.answer(
-            format_falls(rows, f"🌐 <b>Слёты сервера {rows[0][0].upper()}</b>"),
+            format_falls(
+                rows, f"🌐 <b>Слёты сервера {rows[0][0].upper()}</b>"
+            ),
             parse_mode="HTML",
         )
-
     await callback.answer()
 
 
-@dp.message(F.text == "📍 Статус")
+@dp.message(F.text.in_({"📍 Статус", "Статус"}))
 async def status(message: types.Message):
     if not has_access(message.from_user.id):
         return
-
-    conn = db()
-    # Сортировка по убыванию: свежие сканы (по реальной дате/времени) сверху, старые — снизу
-    rows = conn.execute(
-        "SELECT server_name, MAX(last_updated) "
-        "FROM server_objects GROUP BY server_id "
-        "ORDER BY MAX(datetime(substr(last_updated,7,4)||'-'||substr(last_updated,4,2)||'-'||substr(last_updated,1,2)||' '||substr(last_updated,12))) DESC"
+    con = db()
+    rows = con.execute(
+        "SELECT server_name, MAX(last_updated) FROM server_objects GROUP BY server_id"
     ).fetchall()
-    conn.close()
-
+    con.close()
+    rows.sort(key=lambda row: row[1] or "", reverse=True)
     if not rows:
         await message.answer("📍 Данных о сканировании пока нет.")
         return
-
     lines = ["📍 <b>Последние сейвы по серверам:</b>", ""]
     for name, value in rows:
         lines.append(f"<code>{name:<14} | {value}</code>")
-
     await message.answer("\n".join(lines), parse_mode="HTML")
 
 
-@dp.message(F.text == "😴 Стоит проснуться")
+@dp.message(F.text.in_({"😴 Стоит проснуться", "Стоит проснуться"}))
 async def wakeup(message: types.Message):
     if not has_access(message.from_user.id):
         return
-
     rows = fetch_rows("is_frozen = 0")
     grouped = {}
     for row in rows:
         grouped.setdefault((row[7], row[1]), []).append(row)
-
     selected = []
     for values in grouped.values():
-        business_exists = any(row[3] == "Бизнес" for row in values)
-        houses_count = sum(row[3] == "Дом" for row in values)
-        if business_exists or houses_count > 5:
+        if any(row[3] == "Бизнес" for row in values) or sum(row[3] == "Дом" for row in values) > 5:
             selected.extend(values)
-
     await message.answer(
         format_falls(selected, "😴 <b>Стоит проснуться</b>"),
         parse_mode="HTML",
     )
 
 
-@dp.message(F.text == "🏆 Поиск по сезону")
+@dp.message(F.text.in_({"🏆 Поиск по сезону", "Поиск по сезону"}))
 async def season_menu(message: types.Message):
     if not has_access(message.from_user.id):
         return
-
     buttons = [
         [InlineKeyboardButton(text=season, callback_data=f"season:{season}")]
         for season in SEASONS
@@ -510,12 +470,8 @@ async def season_result(callback: types.CallbackQuery):
     if not has_access(callback.from_user.id):
         await callback.answer("Нет доступа", show_alert=True)
         return
-
     season = callback.data.split(":", 1)[1]
-    rows = fetch_rows(
-        "season = ? AND is_frozen = 0",
-        (season,),
-    )
+    rows = fetch_rows("season = ? AND is_frozen = 0", (season,))
     await message.answer(
         format_falls(rows, f"🏆 <b>Сезон: {season}</b>"),
         parse_mode="HTML",
