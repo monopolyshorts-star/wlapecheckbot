@@ -42,7 +42,7 @@ SEASON_ICONS = {
 }
 
 SELECT_COLUMNS = (
-    "server_name, server_id, season, obj_type, slot, payday, "
+    "server_name, server_id, season, obj_type, slot, house_id, payday, "
     "insurance_status, exact_fall_time, is_frozen, is_h2, is_estate"
 )
 
@@ -66,6 +66,11 @@ def db():
             season TEXT
         )
     """)
+    try:
+        conn.execute("ALTER TABLE server_objects ADD COLUMN house_id INTEGER;")
+        conn.commit()
+    except:
+        pass
     conn.commit()
     return conn
 
@@ -171,13 +176,13 @@ def format_server_compact(rows, server_id, server_name):
     houses = [r for r in rows if r[3] == "Дом"]
     businesses = [r for r in rows if r[3] == "Бизнес"]
 
+    is_skorostrely = ("скорострел" in season.lower())
+
     if houses:
         result.append("   └─ 🏠 <b>Дома:</b>")
         for r in sorted(houses, key=lambda x: x[4]):
-            _, _, _, _, slot, payday, status, fall_time, _, _, is_estate = r
+            _, _, _, _, slot, house_id, payday, status, fall_time, _, _, _ = r
             info = status_name(status)
-            if is_estate:
-                info += ", с поместьем"
             time_str = ""
             if fall_time:
                 try:
@@ -185,12 +190,14 @@ def format_server_compact(rows, server_id, server_name):
                     time_str = f" | ⏰ {dt.strftime('%H:%M')}"
                 except:
                     pass
-            result.append(f"      pos {slot} (PayDay: {payday}) - {info}{time_str}")
+            
+            id_part = f" [ID: {house_id}]" if (is_skorostrely and house_id) else ""
+            result.append(f"      pos {slot}{id_part} (PayDay: {payday}) - {info}{time_str}")
 
     if businesses:
         result.append("   └─ ✨ <b>Бизнесы:</b>")
         for r in sorted(businesses, key=lambda x: x[4]):
-            _, _, _, _, slot, payday, status, fall_time, _, _, is_estate = r
+            _, _, _, _, slot, house_id, payday, status, fall_time, _, _, _ = r
             info = status_name(status)
             time_str = ""
             if fall_time:
@@ -199,7 +206,9 @@ def format_server_compact(rows, server_id, server_name):
                     time_str = f" | ⏰ {dt.strftime('%H:%M')}"
                 except:
                     pass
-            result.append(f"      pos {slot} (PayDay: {payday}) - {info}{time_str}")
+            
+            id_part = f" [ID: {house_id}]" if (is_skorostrely and house_id) else ""
+            result.append(f"      pos {slot}{id_part} (PayDay: {payday}) - {info}{time_str}")
 
     return "\n".join(result)
 
@@ -216,6 +225,7 @@ def format_falls(rows, title):
             season,
             obj_type,
             slot,
+            house_id,
             payday,
             status,
             fall_time,
@@ -252,6 +262,8 @@ def format_falls(rows, title):
             f"   └─🌐 <b>Сервер {server_name.upper()} {icon_emoji}</b>"
         )
 
+        is_skorostrely = ("скорострел" in season.lower())
+
         for obj_type, objects in groups.items():
             if not objects:
                 continue
@@ -267,20 +279,20 @@ def format_falls(rows, title):
                     _,
                     _,
                     slot,
+                    house_id,
                     payday,
                     status,
                     _,
                     _,
-                    is_h2,
-                    is_estate,
+                    _,
+                    _,
                 ) = row
 
                 info = status_name(status)
-                if is_estate:
-                    info += " (🔒 С поместьем)"
+                id_part = f" [ID: {house_id}]" if (is_skorostrely and house_id) else ""
 
                 result.append(
-                    f"         └─pos {slot} "
+                    f"         └─pos {slot}{id_part} "
                     f"(PayDay: {payday}) - {info}"
                 )
 
