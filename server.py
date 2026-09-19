@@ -24,8 +24,6 @@ class RealtorPayload(BaseModel):
 
 def calculate_fall_time(obj_type: str, payday_val: int, insurance_status: str, update_time: datetime):
     try:
-        # Если статус Нестрах — падает по 2 PD в час, цель = 3
-        # Если Страх или Неизвестно — падает по 1 PD в час, цель = 2
         is_insured = True
         if insurance_status and "Нестрах" in str(insurance_status):
             is_insured = False
@@ -56,41 +54,65 @@ async def update_objects(payload: RealtorPayload):
             
         now_str = now.strftime("%d.%m.%Y %H:%M:%S")
 
+        # 1. Получаем список существующих объектов в базе для этого сервера и типа
+        # чтобы правильно сопоставить их по PayDay, даже если список сместился.
         for item in payload.items:
+            # Сначала ищем по точному номеру слота (позиции)
             cursor.execute("""
-                SELECT payday, recorded_at FROM scan_history
-                WHERE server_id = ? AND slot = ? AND obj_type = ?
-                ORDER BY id DESC LIMIT 1
+                SELECT payday, insurance_status, recorded_at FROM scan_history sh
+                JOIN server_objects so ON sh.server_id = so.server_id AND sh.slot = so.slot AND sh.obj_type = so.obj_type
+                WHERE sh.server_id = ? AND sh.slot = ? AND sh.obj_type = ?
+                ORDER BY sh.id DESC LIMIT 1
             """, (str(payload.server_id), item.slot, item.type))
             old_rec = cursor.fetchone()
 
+            insurance = item.state
+            matched_by_shift = False
+
+            # Если по точному слоту не нашли или слот сместился, пробуем найти объект по похожему старому PayDay (+1 или +2)
+            if not old_rec:
+                cursor.execute("""
+                    SELECT so.slot, so.payday, so.insurance_status, sh.recorded_at FROM server_objects so
+                    JOIN scan_history sh ON so.server_id = sh.server_id AND so.slot = sh.slot AND so.obj_type = sh.obj_type
+                    WHERE so.server_id = ? AND so.obj_type = ? AND so.payday IN (?, ?, ?)
+                    ORDER BY sh.id DESC LIMIT 1
+                """, (str(payload.server_id), item.type, item.payday + 1, item.payday + 2, item.payday))
+                shift_rec = cursor.fetchone()
+                if shift_rec:
+                    old_slot, old_pd, old_ins, old_time_str = shift_rec
+                    old_rec = (old_pd, old_time_str)
+                    matched_by_shift = True
+                    # Если у старого объекта был статус, переносим его на сместившийся слот
+                    if old_ins and old_ins != "Неизвестно":
+                        insurance = old_ins
+
             is_frozen = 0
             is_estate = 0
-            insurance = item.state
 
-            # Если это первый скан (нет истории) — ставим строго "Неизвестно"
-            if not old_rec:
-                insurance = "Неизвестно"
-            elif not insurance:
-                # Если скан повторный, но статус из игры не пришел — вычисляем по разнице PD
-                old_pd, old_time_str = old_rec
-                try:
-                    old_time = datetime.strptime(old_time_str, "%d.%m.%Y %H:%M:%S")
-                    hours_diff = max(1, int((now - old_time).total_seconds() / 3600))
-                    pd_diff = old_pd - item.payday
-                    drop_speed = pd_diff / hours_diff
-                    
-                    if drop_speed >= 1.5:
-                        insurance = "Нестрах"
-                    elif drop_speed > 0:
-                        insurance = "Страх"
-                    else:
+            # АВТОМАТИЧЕСКОЕ ОПРЕДЕЛЕНИЕ СТРАХОВКИ ПО РАЗНИЦЕ PAYDAY
+            if not insurance or insurance == "Неизвестно":
+                if old_rec:
+                    old_pd, old_time_str = old_rec
+                    try:
+                        old_time = datetime.strptime(old_time_str, "%d.%m.%Y %H:%M:%S")
+                        hours_diff = max(1, int((now - old_time).total_seconds() / 3600))
+                        pd_diff = old_pd - item.payday
+                        drop_speed = pd_diff / hours_diff
+                        
+                        if drop_speed >= 1.5:
+                            insurance = "Нестрах"
+                        elif drop_speed > 0:
+                            insurance = "Страх"
+                        else:
+                            insurance = "Неизвестно"
+                    except:
                         insurance = "Неизвестно"
-                except:
+                else:
                     insurance = "Неизвестно"
 
             fall_time = calculate_fall_time(item.type, item.payday, insurance, now)
 
+            # Сохраняем актуальный объект в таблицу server_objects
             cursor.execute("""
                 INSERT INTO server_objects (server_id, server_name, season, obj_type, slot, payday, insurance_status, exact_fall_time, last_updated, is_frozen, is_h2, is_estate)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)
