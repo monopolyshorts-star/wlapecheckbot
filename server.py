@@ -28,12 +28,19 @@ class RealtorPayload(BaseModel):
 
 def calculate_fall_time(obj_type: str, payday_val: int, insurance_status: str, update_time: datetime):
     try:
+        is_biz = (obj_type == "Бизнес")
         is_insured = True
-        if insurance_status and "Нестрах" in str(insurance_status):
-            is_insured = False
-
-        drop_per_hour = 1 if is_insured else 2
-        target_pd = 2 if is_insured else 3
+        
+        if is_biz:
+            if insurance_status in ["Нестрах, Без занятости", "Нестрах"]:
+                is_insured = False
+            drop_per_hour = 4 if insurance_status in ["Нестрах, Без занятости", "Нестрах"] else (1 if insurance_status == "Страх, Занят" else 2)
+            target_pd = 4 if not is_insured else 2
+        else:
+            if insurance_status and "Нестрах" in str(insurance_status):
+                is_insured = False
+            drop_per_hour = 1 if is_insured else 2
+            target_pd = 2 if is_insured else 3
 
         paydays_left = max(0, payday_val - target_pd)
         hours_to_add = paydays_left / drop_per_hour
@@ -58,6 +65,11 @@ async def update_objects(payload: RealtorPayload):
             
         now_str = now.strftime("%d.%m.%Y %H:%M:%S")
 
+        # Проверяем, не задан ли принудительно сезон администратором
+        cursor.execute("SELECT season FROM manual_seasons WHERE server_id = ?", (str(payload.server_id),))
+        m_season = cursor.fetchone()
+        active_season = m_season[0] if m_season and m_season[0] else payload.season
+
         for item in payload.items:
             cursor.execute("""
                 SELECT payday, recorded_at FROM scan_history
@@ -80,12 +92,22 @@ async def update_objects(payload: RealtorPayload):
                     pd_diff = old_pd - item.payday
                     drop_speed = pd_diff / hours_diff
                     
-                    if drop_speed >= 1.5:
-                        insurance = "Нестрах"
-                    elif drop_speed > 0:
-                        insurance = "Страх"
+                    if item.type == "Бизнес":
+                        if drop_speed >= 3.5:
+                            insurance = "Нестрах, Без занятости"
+                        elif drop_speed >= 1.8 and drop_speed <= 2.2:
+                            insurance = "Страх, Незанят"
+                        elif drop_speed >= 0.8 and drop_speed <= 1.2:
+                            insurance = "Страх, Занят"
+                        else:
+                            insurance = "Неизвестно"
                     else:
-                        insurance = "Неизвестно"
+                        if drop_speed >= 1.5:
+                            insurance = "Нестрах"
+                        elif drop_speed > 0:
+                            insurance = "Страх"
+                        else:
+                            insurance = "Неизвестно"
                 except:
                     insurance = "Неизвестно"
 
@@ -102,7 +124,7 @@ async def update_objects(payload: RealtorPayload):
                     last_updated = excluded.last_updated,
                     is_frozen = excluded.is_frozen,
                     is_estate = excluded.is_estate
-            """, (str(payload.server_id), payload.server_name, payload.season, item.type, item.slot, item.payday, insurance, fall_time, now_str, 0, 0))
+            """, (str(payload.server_id), payload.server_name, active_season, item.type, item.slot, item.payday, insurance, fall_time, now_str, 0, 0))
 
             cursor.execute("""
                 INSERT INTO scan_history (server_id, slot, obj_type, payday, recorded_at)
