@@ -152,10 +152,15 @@ def fetch_rows(where="", params=()):
     return rows
 
 
-# Точная структура как на скриншоте образца: блок цитаты (blockquote), молния ⚡, пины 📍, звезды ⭐, префикс -id
+# -------------------------------------------------------------
+# БЛИЖАЙШИЕ / ВСЕ СЛЁТЫ (СТРОГО ТОЧНО ИЗВЕСТНЫЕ СТАТУСЫ)
+# -------------------------------------------------------------
 def format_falls(rows, header_title):
-    if not rows:
-        return f"{header_title}\n\n⚠️ Слётов не обнаружено."
+    # Фильтруем: исключаем объекты со статусом "Неизвестно"
+    known_rows = [r for r in rows if r[7] and r[7] != "Неизвестно"]
+
+    if not known_rows:
+        return f"{header_title}\n\n⚠️ Точно известных слётов не обнаружено."
 
     conn = db()
     manual_dict = dict(conn.execute("SELECT server_id, season FROM manual_seasons").fetchall())
@@ -165,7 +170,7 @@ def format_falls(rows, header_title):
     total_houses = 0
     total_biz = 0
 
-    for row in rows:
+    for row in known_rows:
         (
             server_name,
             server_id,
@@ -199,15 +204,13 @@ def format_falls(rows, header_title):
         grouped.setdefault(key, {"Дом": [], "Бизнес": []})[obj_type].append(row)
 
     if not grouped:
-        return f"{header_title}\n\n⚠️ Слётов с рассчитанным временем не обнаружено."
+        return f"{header_title}\n\n⚠️ Точно известных слётов с рассчитанным временем не обнаружено."
 
-    # Верхняя шапка со счетчиком объектов
     top_header = f"{header_title}\n🏠×{total_houses} 🏢×{total_biz}"
 
     body_lines = []
     current_hour = None
 
-    # Сортируем слёты по времени и имени сервера
     for (hour, server_id, server_name, season), groups in sorted(grouped.items(), key=lambda x: (x[0][0], x[0][2])):
         hour_prefix = ""
         if hour != current_hour:
@@ -230,7 +233,6 @@ def format_falls(rows, header_title):
                 is_last = (idx == len(houses) - 1)
                 tree_char = "└──" if is_last else "├──"
 
-                # Если есть номер дома (скорострелы), пишем -id ЧИСЛО
                 if house_id:
                     body_lines.append(f"{hour_prefix}│     {tree_char}id {house_id} (PayDay: {payday}) - {info}")
                 else:
@@ -257,6 +259,9 @@ def format_falls(rows, header_title):
     return f"{top_header}\n<blockquote>{quote_content}</blockquote>"
 
 
+# -------------------------------------------------------------
+# ПО СЕРВЕРУ (ПОЛНЫЙ СПИСОК С НЕИЗВЕСТНЫМИ ВНУТРИ ЦИТАТЫ)
+# -------------------------------------------------------------
 def format_server_compact(rows, server_id, server_name):
     conn = db()
     m_row = conn.execute("SELECT season FROM manual_seasons WHERE server_id = ?", (str(server_id),)).fetchone()
@@ -271,23 +276,22 @@ def format_server_compact(rows, server_id, server_name):
     season_icon = get_season_icon(season)
 
     if not rows:
-        return f"🌐 <b>Сервер {server_name.upper()}[{server_id}]</b>\n   └─ Сезон 🌐 \"<b>{season.upper()}</b>\" {season_icon}\n\n⚠️ Активных слётов не обнаружено."
+        return f"🌐 <b>Сервер {server_name.upper()}[{server_id}]</b>\n<blockquote>└─ Сезон 🌐 \"<b>{season.upper()}</b>\" {season_icon}\n\n⚠️ Активных объектов не обнаружено.</blockquote>"
 
     result = [
-        f"🌐 <b>Сервер {server_name.upper()}[{server_id}]</b>",
-        f"   └─ Сезон 🌐 \"<b>{season.upper()}</b>\" {season_icon}",
+        f"└─ Сезон 🌐 \"{season.upper()}\" {season_icon}",
     ]
 
     houses = [r for r in rows if r[3] == "Дом"]
     businesses = [r for r in rows if r[3] == "Бизнес"]
 
     if houses:
-        result.append("   └─ 🏠 <b>Дома:</b>")
+        result.append("└─ 🏠 Дома:")
         for r in sorted(houses, key=lambda x: x[4]):
             _, _, _, _, slot, house_id, payday, status, fall_time, _, _, is_estate = r
             info = status_name(status)
             if is_estate:
-                info += ", с поместьем"
+                info += " (🔒 С поместьем)"
             time_str = ""
             if fall_time:
                 try:
@@ -297,10 +301,10 @@ def format_server_compact(rows, server_id, server_name):
                     pass
             
             prefix = f"id {house_id}" if house_id else f"pos {slot}"
-            result.append(f"      {prefix} (PayDay: {payday}) - {info}{time_str}")
+            result.append(f"   {prefix} (PayDay: {payday}) - {info}{time_str}")
 
     if businesses:
-        result.append("   └─ ✨ <b>Бизнесы:</b>")
+        result.append("└─ ✨ Бизнесы:")
         for r in sorted(businesses, key=lambda x: x[4]):
             _, _, _, _, slot, house_id, payday, status, fall_time, _, _, is_estate = r
             info = status_name(status)
@@ -312,9 +316,11 @@ def format_server_compact(rows, server_id, server_name):
                 except:
                     pass
             prefix = f"id {house_id}" if house_id else f"pos {slot}"
-            result.append(f"      {prefix} (PayDay: {payday}) - {info}{time_str}")
+            result.append(f"   {prefix} (PayDay: {payday}) - {info}{time_str}")
 
-    return "\n".join(result)
+    header = f"🌐 <b>Сервер {server_name.upper()}[{server_id}]</b>"
+    quote_body = "\n".join(result)
+    return f"{header}\n<blockquote>{quote_body}</blockquote>"
 
 
 @dp.message(Command("start"))
@@ -472,8 +478,10 @@ async def wakeup(message: types.Message):
     if not has_access(message.from_user.id):
         return
     rows = fetch_rows("is_frozen = 0")
+    # Только точно известные
+    known = [r for r in rows if r[7] and r[7] != "Неизвестно"]
     grouped = {}
-    for row in rows:
+    for row in known:
         grouped.setdefault((row[8], row[1]), []).append(row)
     selected = []
     for values in grouped.values():
