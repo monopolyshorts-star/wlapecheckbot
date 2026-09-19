@@ -152,7 +152,6 @@ def fetch_rows(where="", params=()):
     return rows
 
 
-# Восстановленная исходная структура "Дерево" (как на скриншоте "ДО")
 def format_falls(rows, title):
     if not rows:
         return f"{title}\n\n⚠️ Слётов не обнаружено."
@@ -186,6 +185,7 @@ def format_falls(rows, title):
         except (ValueError, TypeError):
             continue
 
+        # Приоритет сезона: ручной из админки -> из таблицы объектов
         active_season = manual_dict.get(str(server_id)) or season or "Неизвестно"
         key = (dt.strftime("%H:00"), server_id, server_name, active_season)
         grouped.setdefault(key, {"Дом": [], "Бизнес": []})[obj_type].append(row)
@@ -204,8 +204,6 @@ def format_falls(rows, title):
         icon_emoji = get_season_icon(season)
         result.append(f"   └─🌐 <b>Сервер {server_name.upper()} {icon_emoji}</b>")
 
-        is_skorostrely = ("скорострел" in season.lower())
-
         for obj_type in ("Дом", "Бизнес"):
             objects = groups[obj_type]
             if not objects:
@@ -221,7 +219,8 @@ def format_falls(rows, title):
                 if is_estate:
                     info += " (🔒 С поместьем)"
 
-                id_part = f" [ID: {house_id}]" if (is_skorostrely and house_id) else ""
+                # Если есть house_id (для Скорострелов), всегда его выводим
+                id_part = f" [ID: {house_id}]" if house_id else ""
                 result.append(f"         └─pos {slot}{id_part} (PayDay: {payday}) - {info}")
 
         result.append("")
@@ -241,7 +240,6 @@ def format_server_compact(rows, server_id, server_name):
         season = rows[0][2]
 
     season_icon = get_season_icon(season)
-    is_skorostrely = ("скорострел" in season.lower())
 
     if not rows:
         return f"🌐 <b>Сервер {server_name.upper()}[{server_id}]</b>\n   └─ Сезон 🌐 \"<b>{season.upper()}</b>\" {season_icon}\n\n⚠️ Активных слётов не обнаружено."
@@ -268,7 +266,7 @@ def format_server_compact(rows, server_id, server_name):
                     time_str = f" | ⏰ {dt.strftime('%H:%M')}"
                 except:
                     pass
-            id_part = f" [ID: {house_id}]" if (is_skorostrely and house_id) else ""
+            id_part = f" [ID: {house_id}]" if house_id else ""
             result.append(f"      pos {slot}{id_part} (PayDay: {payday}) - {info}{time_str}")
 
     if businesses:
@@ -283,7 +281,7 @@ def format_server_compact(rows, server_id, server_name):
                     time_str = f" | ⏰ {dt.strftime('%H:%M')}"
                 except:
                     pass
-            id_part = f" [ID: {house_id}]" if (is_skorostrely and house_id) else ""
+            id_part = f" [ID: {house_id}]" if house_id else ""
             result.append(f"      pos {slot}{id_part} (PayDay: {payday}) - {info}{time_str}")
 
     return "\n".join(result)
