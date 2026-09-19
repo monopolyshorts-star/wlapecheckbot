@@ -9,6 +9,23 @@ from database import DB_NAME, init_db
 app = FastAPI(title="Arizona Tracker API")
 init_db()
 
+def ensure_schema():
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS manual_seasons (
+            server_id TEXT PRIMARY KEY,
+            season TEXT NOT NULL
+        )
+    """)
+    columns = {row[1] for row in cursor.execute("PRAGMA table_info(server_objects)").fetchall()}
+    if "house_id" not in columns:
+        cursor.execute("ALTER TABLE server_objects ADD COLUMN house_id INTEGER;")
+    conn.commit()
+    conn.close()
+
+ensure_schema()
+
 @app.get("/")
 def read_root():
     return {"status": "online", "service": "Arizona Tracker API is running"}
@@ -56,16 +73,10 @@ def calculate_fall_time(obj_type: str, payday_val: int, insurance_status: str, u
 @app.post("/api/update")
 async def update_objects(payload: RealtorPayload):
     try:
+        print(f"[API] Получен запрос от сервера {payload.server_name} ({payload.server_id}), объектов: {len(payload.items)}")
         conn = sqlite3.connect(DB_NAME)
         cursor = conn.cursor()
         
-        # Автоматическое добавление колонки house_id, если её нет в БД
-        try:
-            cursor.execute("ALTER TABLE server_objects ADD COLUMN house_id INTEGER;")
-            conn.commit()
-        except:
-            pass
-
         if payload.scan_ts:
             now = (datetime.fromtimestamp(payload.scan_ts, tz=timezone.utc) + timedelta(hours=3)).replace(tzinfo=None)
         else:
@@ -139,6 +150,7 @@ async def update_objects(payload: RealtorPayload):
 
         conn.commit()
         conn.close()
+        print(f"[API] Успешно сохранено объектов для сервера {payload.server_id}: {len(payload.items)}")
         return {"status": "success", "count": len(payload.items)}
     except Exception as e:
         print(f"[API Error] {e}")
