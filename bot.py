@@ -24,13 +24,6 @@ bot = Bot(token=TOKEN)
 dp = Dispatcher()
 logging.basicConfig(level=logging.INFO)
 
-SEASONS = [
-    "Скорострелы",
-    "Ловля по инфе",
-    "Автогонки",
-    "По новому",
-    "Мотогонки",
-]
 SEASON_ICONS = {
     "Мотогонки": "🏍",
     "Ловля по инфе": "📱",
@@ -45,6 +38,17 @@ SELECT_COLUMNS = (
     "insurance_status, exact_fall_time, is_frozen, is_h2, is_estate"
 )
 
+SERVERS_LIST = [
+    ("01", "Phoenix"), ("02", "Tucson"), ("03", "Scottdale"), ("04", "Chandler"),
+    ("05", "Brainburg"), ("06", "Saint-Rose"), ("07", "Mesa"), ("08", "Red-Rock"),
+    ("09", "Yuma"), ("10", "Surprise"), ("11", "Prescott"), ("12", "Glendale"),
+    ("13", "Kingman"), ("14", "Winslow"), ("15", "Payson"), ("16", "Gilbert"),
+    ("17", "Show-Low"), ("18", "Casa-Grande"), ("19", "Page"), ("20", "Sun-City"),
+    ("21", "Queen-Creek"), ("22", "Sedona"), ("23", "Holiday"), ("24", "Wednesday"),
+    ("25", "Yava"), ("26", "Faraway"), ("27", "Bumble Bee"), ("28", "Christmas"),
+    ("29", "Mirage"), ("30", "Love"), ("31", "Drake"), ("32", "Space"), ("33", "Home")
+]
+
 
 def db():
     return sqlite3.connect(DB_NAME)
@@ -53,17 +57,14 @@ def db():
 def has_access(user_id: int) -> bool:
     if user_id in ADMIN_IDS:
         return True
-
     conn = db()
     row = conn.execute(
         "SELECT expires_at FROM allowed_users WHERE user_id = ?",
         (user_id,),
     ).fetchone()
     conn.close()
-
     if not row:
         return False
-
     try:
         return datetime.fromisoformat(row[0]) > datetime.now()
     except ValueError:
@@ -79,10 +80,9 @@ def keyboard():
             ],
             [
                 KeyboardButton(text="🌐 По серверу"),
-                KeyboardButton(text="🏆 Поиск по сезону"),
+                KeyboardButton(text="📍 Статус"),
             ],
             [
-                KeyboardButton(text="📍 Статус"),
                 KeyboardButton(text="😴 Стоит проснуться"),
             ],
         ],
@@ -213,6 +213,54 @@ def format_falls(rows, title):
                 )
 
         result.append("")
+
+    return "\n".join(result)
+
+
+def format_server_compact(rows, server_id, server_name):
+    if not rows:
+        return f"🌐 <b>Сервер {server_name.upper()}[{server_id}]</b>\n\n⚠️ Активных слётов не обнаружено."
+
+    season = rows[0][2] or "Неизвестно"
+    season_icon = get_season_icon(season)
+
+    result = [
+        f"🌐 <b>Сервер {server_name.upper()}[{server_id}]</b>",
+        f"   └─ Сезон 🌐 \"<b>{season.upper()}</b>\" {season_icon}",
+    ]
+
+    houses = [r for r in rows if r[3] == "Дом"]
+    businesses = [r for r in rows if r[3] == "Бизнес"]
+
+    if houses:
+        result.append("   └─ 🏠 <b>Дома:</b>")
+        for r in sorted(houses, key=lambda x: x[4]):
+            _, _, _, _, slot, payday, status, fall_time, _, _, is_estate = r
+            info = status_name(status)
+            if is_estate:
+                info += ", с поместьем"
+            time_str = ""
+            if fall_time:
+                try:
+                    dt = datetime.fromisoformat(fall_time)
+                    time_str = f" | ⏰ {dt.strftime('%H:%M')}"
+                except:
+                    pass
+            result.append(f"      pos {slot} (PayDay: {payday}) - {info}{time_str}")
+
+    if businesses:
+        result.append("   └─ ✨ <b>Бизнесы:</b>")
+        for r in sorted(businesses, key=lambda x: x[4]):
+            _, _, _, _, slot, payday, status, fall_time, _, _, is_estate = r
+            info = status_name(status)
+            time_str = ""
+            if fall_time:
+                try:
+                    dt = datetime.fromisoformat(fall_time)
+                    time_str = f" | ⏰ {dt.strftime('%H:%M')}"
+                except:
+                    pass
+            result.append(f"      pos {slot} (PayDay: {payday}) - {info}{time_str}")
 
     return "\n".join(result)
 
@@ -369,26 +417,20 @@ async def all_falls(message: types.Message):
 async def servers_menu(message: types.Message):
     if not has_access(message.from_user.id):
         return
-    con = db()
-    servers = con.execute(
-        "SELECT DISTINCT server_id, server_name FROM server_objects ORDER BY server_name"
-    ).fetchall()
-    con.close()
-    if not servers:
-        await message.answer("⚠️ В базе пока нет данных по серверам.")
-        return
-    buttons = [
-        [
-            InlineKeyboardButton(
-                text=f"{name} [{server_id}]",
-                callback_data=f"srv:{server_id}",
-            )
-        ]
-        for server_id, name in servers
-    ]
+    
+    buttons = []
+    for s_id, s_name in SERVERS_LIST:
+        buttons.append(InlineKeyboardButton(text=f"{s_name} [{s_id}]", callback_data=f"srv:{s_id}"))
+    
+    # Раскладываем кнопки по 2 в ряд
+    keyboard_inline = []
+    for i in range(0, len(buttons), 2):
+        row = buttons[i:i+2]
+        keyboard_inline.append(row)
+
     await message.answer(
-        "🌐 Выберите сервер:",
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
+        "🌐 Выберите сервер из списка:",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=keyboard_inline),
     )
 
 
@@ -398,16 +440,18 @@ async def server_result(callback: types.CallbackQuery):
         await callback.answer("Нет доступа", show_alert=True)
         return
     server_id = callback.data.split(":", 1)[1]
+    
+    # Ищем имя сервера по его ID
+    server_name = server_id
+    for s_id, s_name in SERVERS_LIST:
+        if s_id == server_id:
+            server_name = s_name
+            break
+
     rows = fetch_rows("server_id = ? AND is_frozen = 0", (server_id,))
-    if not rows:
-        await callback.message.answer("⚠️ На этом сервере нет активных слётов.")
-    else:
-        await callback.message.answer(
-            format_falls(
-                rows, f"🌐 <b>Слёты сервера {rows[0][0].upper()}</b>"
-            ),
-            parse_mode="HTML",
-        )
+    text_result = format_server_compact(rows, server_id, server_name)
+    
+    await callback.message.answer(text_result, parse_mode="HTML")
     await callback.answer()
 
 
@@ -446,34 +490,6 @@ async def wakeup(message: types.Message):
         format_falls(selected, "😴 <b>Стоит проснуться</b>"),
         parse_mode="HTML",
     )
-
-
-@dp.message(F.text.in_({"🏆 Поиск по сезону", "Поиск по сезону"}))
-async def season_menu(message: types.Message):
-    if not has_access(message.from_user.id):
-        return
-    buttons = [
-        [InlineKeyboardButton(text=season, callback_data=f"season:{season}")]
-        for season in SEASONS
-    ]
-    await message.answer(
-        "🏆 Выберите сезон:",
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
-    )
-
-
-@dp.callback_query(F.data.startswith("season:"))
-async def season_result(callback: types.CallbackQuery):
-    if not has_access(callback.from_user.id):
-        await callback.answer("Нет доступа", show_alert=True)
-        return
-    season = callback.data.split(":", 1)[1]
-    rows = fetch_rows("season = ? AND is_frozen = 0", (season,))
-    await message.answer(
-        format_falls(rows, f"🏆 <b>Сезон: {season}</b>"),
-        parse_mode="HTML",
-    )
-    await callback.answer()
 
 
 async def main():
