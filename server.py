@@ -24,18 +24,17 @@ class RealtorPayload(BaseModel):
 
 def calculate_fall_time(obj_type: str, payday_val: int, insurance_status: str, update_time: datetime):
     try:
-        # Страхованные дома/бизнесы падают со скоростью 1 PD в час, нестрахованные — 2 PD в час
         is_insured = True
         if insurance_status and "Нестрах" in str(insurance_status):
             is_insured = False
 
         drop_per_hour = 1 if is_insured else 2
-        target_pd = 2 if is_insured else 3  # Целевой порог слёта
+        target_pd = 2 if is_insured else 3  # Целевой PD слёта (для страха = 2)
 
         paydays_left = max(0, payday_val - target_pd)
         hours_to_add = paydays_left / drop_per_hour
 
-        # Ближайший PayDay — следующий ровный час по МСК
+        # Ближайший ровный час PayDay (если скан в 06:30, то старт расчёта с 07:00)
         next_payday = (update_time + timedelta(hours=1)).replace(minute=0, second=0, microsecond=0)
         fall_time = next_payday + timedelta(hours=hours_to_add)
         return fall_time.isoformat()
@@ -49,7 +48,7 @@ async def update_objects(payload: RealtorPayload):
         conn = sqlite3.connect(DB_NAME)
         cursor = conn.cursor()
         
-        # Перевод локального времени игрока (+7) в Московское время (МСК / UTC+3)
+        # Точный пересчет времени из часового пояса игрока (+7) в Московское время (МСК / UTC+3)
         if payload.scan_ts:
             local_time = datetime.fromtimestamp(payload.scan_ts)
             now = local_time - timedelta(hours=4)
@@ -59,6 +58,7 @@ async def update_objects(payload: RealtorPayload):
         now_str = now.strftime("%d.%m.%Y %H:%M:%S")
 
         for item in payload.items:
+            # Предотвращаем дубли и баги слотов: сохраняем отдельно Дом и Бизнес по их номеру позиции
             cursor.execute("""
                 SELECT payday, recorded_at FROM scan_history
                 WHERE server_id = ? AND slot = ? AND obj_type = ?
@@ -69,32 +69,6 @@ async def update_objects(payload: RealtorPayload):
             is_frozen = 0
             is_estate = 0
             insurance = item.state
-
-            if old_rec:
-                old_pd, old_time_str = old_rec
-                try:
-                    old_time = datetime.strptime(old_time_str, "%d.%m.%Y %H:%M:%S")
-                    hours_diff = int((now - old_time).total_seconds() / 3600)
-                    if hours_diff > 0:
-                        pd_diff = old_pd - item.payday
-                        if pd_diff == 0 and hours_diff >= 2:
-                            is_frozen = 1
-                except:
-                    pass
-
-            # Определение страховки по скорости уменьшения
-            if not insurance and old_rec:
-                old_pd = old_rec[0]
-                try:
-                    old_time = datetime.strptime(old_rec[1], "%d.%m.%Y %H:%M:%S")
-                    h_diff = max(1, int((now - old_time).total_seconds() / 3600))
-                    drop_speed = (old_pd - item.payday) / h_diff
-                    if drop_speed >= 1.5:
-                        insurance = "Нестрах"
-                    else:
-                        insurance = "Страх"
-                except:
-                    insurance = "Страх"
 
             if not insurance:
                 insurance = "Страх"
