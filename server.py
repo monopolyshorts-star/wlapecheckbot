@@ -24,6 +24,8 @@ class RealtorPayload(BaseModel):
 
 def calculate_fall_time(obj_type: str, payday_val: int, insurance_status: str, update_time: datetime):
     try:
+        # Если статус "Нестрах", то скорость падения 2 PD в час, целевой порог = 3
+        # Если "Страх" или "Неизвестно", то скорость падения 1 PD в час, целевой порог = 2
         is_insured = True
         if insurance_status and "Нестрах" in str(insurance_status):
             is_insured = False
@@ -66,8 +68,9 @@ async def update_objects(payload: RealtorPayload):
             is_estate = 0
             insurance = item.state
 
+            # Если в игре статус не пришел (None или пусто), пишем строго "Неизвестно"
             if not insurance:
-                insurance = "Страх"
+                insurance = "Неизвестно"
 
             fall_time = calculate_fall_time(item.type, item.payday, insurance, now)
 
