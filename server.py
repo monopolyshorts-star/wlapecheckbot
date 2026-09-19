@@ -60,36 +60,34 @@ async def update_objects(payload: RealtorPayload):
 
         for item in payload.items:
             cursor.execute("""
-                SELECT payday, insurance_status, recorded_at FROM scan_history sh
-                JOIN server_objects so ON sh.server_id = so.server_id AND sh.slot = so.slot AND sh.obj_type = so.obj_type
-                WHERE sh.server_id = ? AND sh.slot = ? AND sh.obj_type = ?
-                ORDER BY sh.id DESC LIMIT 1
+                SELECT payday, recorded_at FROM scan_history
+                WHERE server_id = ? AND slot = ? AND obj_type = ?
+                ORDER BY id DESC LIMIT 1
             """, (str(payload.server_id), item.slot, item.type))
             old_rec = cursor.fetchone()
 
+            is_frozen = 0
+            is_estate = 0
             insurance = item.state
 
             if not old_rec:
                 insurance = "Неизвестно"
             elif not insurance:
-                old_pd, old_ins, old_time_str = old_rec
-                if old_ins and old_ins != "Неизвестно":
-                    insurance = old_ins
-                else:
-                    try:
-                        old_time = datetime.strptime(old_time_str, "%d.%m.%Y %H:%M:%S")
-                        hours_diff = max(1, int((now - old_time).total_seconds() / 3600))
-                        pd_diff = old_pd - item.payday
-                        drop_speed = pd_diff / hours_diff
-                        
-                        if drop_speed >= 1.5:
-                            insurance = "Нестрах"
-                        elif drop_speed > 0:
-                            insurance = "Страх"
-                        else:
-                            insurance = "Неизвестно"
-                    except:
+                old_pd, old_time_str = old_rec
+                try:
+                    old_time = datetime.strptime(old_time_str, "%d.%m.%Y %H:%M:%S")
+                    hours_diff = max(1, int((now - old_time).total_seconds() / 3600))
+                    pd_diff = old_pd - item.payday
+                    drop_speed = pd_diff / hours_diff
+                    
+                    if drop_speed >= 1.5:
+                        insurance = "Нестрах"
+                    elif drop_speed > 0:
+                        insurance = "Страх"
+                    else:
                         insurance = "Неизвестно"
+                except:
+                    insurance = "Неизвестно"
 
             fall_time = calculate_fall_time(item.type, item.payday, insurance, now)
 
