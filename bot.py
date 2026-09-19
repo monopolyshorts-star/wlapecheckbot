@@ -152,15 +152,19 @@ def fetch_rows(where="", params=()):
     return rows
 
 
-def format_falls(rows, title):
+# Точная структура как на скриншоте образца: блок цитаты (blockquote), молния ⚡, пины 📍, звезды ⭐, префикс -id
+def format_falls(rows, header_title):
     if not rows:
-        return f"{title}\n\n⚠️ Слётов не обнаружено."
+        return f"{header_title}\n\n⚠️ Слётов не обнаружено."
 
     conn = db()
     manual_dict = dict(conn.execute("SELECT server_id, season FROM manual_seasons").fetchall())
     conn.close()
 
     grouped = {}
+    total_houses = 0
+    total_biz = 0
+
     for row in rows:
         (
             server_name,
@@ -185,47 +189,72 @@ def format_falls(rows, title):
         except (ValueError, TypeError):
             continue
 
-        # Приоритет сезона: ручной из админки -> из таблицы объектов
+        if obj_type == "Дом":
+            total_houses += 1
+        else:
+            total_biz += 1
+
         active_season = manual_dict.get(str(server_id)) or season or "Неизвестно"
         key = (dt.strftime("%H:00"), server_id, server_name, active_season)
         grouped.setdefault(key, {"Дом": [], "Бизнес": []})[obj_type].append(row)
 
     if not grouped:
-        return f"{title}\n\n⚠️ Слётов с рассчитанным временем не обнаружено."
+        return f"{header_title}\n\n⚠️ Слётов с рассчитанным временем не обнаружено."
 
-    result = [title, ""]
+    # Верхняя шапка со счетчиком объектов
+    top_header = f"{header_title}\n🏠×{total_houses} 🏢×{total_biz}"
+
+    body_lines = []
     current_hour = None
 
+    # Сортируем слёты по времени и имени сервера
     for (hour, server_id, server_name, season), groups in sorted(grouped.items(), key=lambda x: (x[0][0], x[0][2])):
+        hour_prefix = ""
         if hour != current_hour:
-            result.append(f"🕰️ <b>Слёты в {hour}:</b> 🕰️")
+            body_lines.append(f"└─⚡ Слёты в {hour}:")
             current_hour = hour
+            hour_prefix = "   "
+        else:
+            hour_prefix = "   "
 
         icon_emoji = get_season_icon(season)
-        result.append(f"   └─🌐 <b>Сервер {server_name.upper()} {icon_emoji}</b>")
+        body_lines.append(f"{hour_prefix}├──🌐 Сервер {server_name.upper()} {icon_emoji}")
 
-        for obj_type in ("Дом", "Бизнес"):
-            objects = groups[obj_type]
-            if not objects:
-                continue
-
-            icon = "🏠" if obj_type == "Дом" else "✨"
-            title_type = "Дома" if obj_type == "Дом" else "Бизнесы"
-            result.append(f"      └─{icon} <b>{title_type}:</b>")
-
-            for row in sorted(objects, key=lambda r: r[4]):
-                _, _, _, _, slot, house_id, payday, status, _, _, _, is_estate = row
+        # Обработка домов
+        houses = groups["Дом"]
+        if houses:
+            body_lines.append(f"{hour_prefix}│  └──📍 Дома:")
+            for idx, r in enumerate(sorted(houses, key=lambda x: x[4])):
+                slot, house_id, payday, status = r[4], r[5], r[6], r[7]
                 info = status_name(status)
-                if is_estate:
-                    info += " (🔒 С поместьем)"
+                is_last = (idx == len(houses) - 1)
+                tree_char = "└──" if is_last else "├──"
 
-                # Если есть house_id (для Скорострелов), всегда его выводим
-                id_part = f" [ID: {house_id}]" if house_id else ""
-                result.append(f"         └─pos {slot}{id_part} (PayDay: {payday}) - {info}")
+                # Если есть номер дома (скорострелы), пишем -id ЧИСЛО
+                if house_id:
+                    body_lines.append(f"{hour_prefix}│     {tree_char}id {house_id} (PayDay: {payday}) - {info}")
+                else:
+                    body_lines.append(f"{hour_prefix}│     {tree_char}pos {slot} (PayDay: {payday}) - {info}")
 
-        result.append("")
+        # Обработка бизнесов
+        bizs = groups["Бизнес"]
+        if bizs:
+            body_lines.append(f"{hour_prefix}│  └──⭐ Бизнесы ⭐:")
+            for idx, r in enumerate(sorted(bizs, key=lambda x: x[4])):
+                slot, house_id, payday, status = r[4], r[5], r[6], r[7]
+                info = status_name(status)
+                is_last = (idx == len(bizs) - 1)
+                tree_char = "└──" if is_last else "├──"
 
-    return "\n".join(result).strip()
+                if house_id:
+                    body_lines.append(f"{hour_prefix}│     {tree_char}id {house_id} (PayDay: {payday}) - {info}")
+                else:
+                    body_lines.append(f"{hour_prefix}│     {tree_char}pos {slot} (PayDay: {payday}) - {info}")
+
+        body_lines.append("")
+
+    quote_content = "\n".join(body_lines).strip()
+    return f"{top_header}\n<blockquote>{quote_content}</blockquote>"
 
 
 def format_server_compact(rows, server_id, server_name):
@@ -266,8 +295,9 @@ def format_server_compact(rows, server_id, server_name):
                     time_str = f" | ⏰ {dt.strftime('%H:%M')}"
                 except:
                     pass
-            id_part = f" [ID: {house_id}]" if house_id else ""
-            result.append(f"      pos {slot}{id_part} (PayDay: {payday}) - {info}{time_str}")
+            
+            prefix = f"id {house_id}" if house_id else f"pos {slot}"
+            result.append(f"      {prefix} (PayDay: {payday}) - {info}{time_str}")
 
     if businesses:
         result.append("   └─ ✨ <b>Бизнесы:</b>")
@@ -281,8 +311,8 @@ def format_server_compact(rows, server_id, server_name):
                     time_str = f" | ⏰ {dt.strftime('%H:%M')}"
                 except:
                     pass
-            id_part = f" [ID: {house_id}]" if house_id else ""
-            result.append(f"      pos {slot}{id_part} (PayDay: {payday}) - {info}{time_str}")
+            prefix = f"id {house_id}" if house_id else f"pos {slot}"
+            result.append(f"      {prefix} (PayDay: {payday}) - {info}{time_str}")
 
     return "\n".join(result)
 
@@ -309,7 +339,7 @@ async def nearest(message: types.Message):
         "is_frozen = 0 AND exact_fall_time BETWEEN ? AND ?",
         (now.isoformat(), limit.isoformat()),
     )
-    await message.answer(format_falls(rows, "⚠️ <b>Ближайшие слёты (3 ПД)</b>"), parse_mode="HTML")
+    await message.answer(format_falls(rows, "⚠️ <b>Слёты в ближайшие 3 часа</b>"), parse_mode="HTML")
 
 
 @dp.message(F.text.in_({"📋 Все слёты", "Все слёты"}))
