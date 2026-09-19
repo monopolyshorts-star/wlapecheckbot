@@ -56,10 +56,10 @@ def calculate_fall_time(obj_type: str, payday_val: int, insurance_status: str, u
 @app.post("/api/update")
 async def update_objects(payload: RealtorPayload):
     try:
+        print(f"[API] Получен запрос от сервера {payload.server_name} ({payload.server_id}), объектов: {len(payload.items)}")
         conn = sqlite3.connect(DB_NAME)
         cursor = conn.cursor()
         
-        # Добавляем колонку house_id в таблицу server_objects, если её еще нет
         try:
             cursor.execute("ALTER TABLE server_objects ADD COLUMN house_id INTEGER;")
             conn.commit()
@@ -85,8 +85,6 @@ async def update_objects(payload: RealtorPayload):
             """, (str(payload.server_id), item.slot, item.type))
             old_rec = cursor.fetchone()
 
-            is_frozen = 0
-            is_estate = 0
             insurance = item.state
 
             if not old_rec:
@@ -141,6 +139,7 @@ async def update_objects(payload: RealtorPayload):
 
         conn.commit()
         conn.close()
+        print(f"[API] Успешно сохранено объектов для сервера {payload.server_id}: {len(payload.items)}")
         return {"status": "success", "count": len(payload.items)}
     except Exception as e:
         print(f"[API Error] {e}")
