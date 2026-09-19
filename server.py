@@ -9,6 +9,10 @@ from database import DB_NAME, init_db
 app = FastAPI(title="Arizona Tracker API")
 init_db()
 
+@app.get("/")
+def read_root():
+    return {"status": "online", "service": "Arizona Tracker API is running"}
+
 class RealtorItem(BaseModel):
     slot: int
     payday: int
@@ -54,10 +58,7 @@ async def update_objects(payload: RealtorPayload):
             
         now_str = now.strftime("%d.%m.%Y %H:%M:%S")
 
-        # 1. Получаем список существующих объектов в базе для этого сервера и типа
-        # чтобы правильно сопоставить их по PayDay, даже если список сместился.
         for item in payload.items:
-            # Сначала ищем по точному номеру слота (позиции)
             cursor.execute("""
                 SELECT payday, insurance_status, recorded_at FROM scan_history sh
                 JOIN server_objects so ON sh.server_id = so.server_id AND sh.slot = so.slot AND sh.obj_type = so.obj_type
@@ -67,32 +68,14 @@ async def update_objects(payload: RealtorPayload):
             old_rec = cursor.fetchone()
 
             insurance = item.state
-            matched_by_shift = False
 
-            # Если по точному слоту не нашли или слот сместился, пробуем найти объект по похожему старому PayDay (+1 или +2)
             if not old_rec:
-                cursor.execute("""
-                    SELECT so.slot, so.payday, so.insurance_status, sh.recorded_at FROM server_objects so
-                    JOIN scan_history sh ON so.server_id = sh.server_id AND so.slot = sh.slot AND so.obj_type = sh.obj_type
-                    WHERE so.server_id = ? AND so.obj_type = ? AND so.payday IN (?, ?, ?)
-                    ORDER BY sh.id DESC LIMIT 1
-                """, (str(payload.server_id), item.type, item.payday + 1, item.payday + 2, item.payday))
-                shift_rec = cursor.fetchone()
-                if shift_rec:
-                    old_slot, old_pd, old_ins, old_time_str = shift_rec
-                    old_rec = (old_pd, old_time_str)
-                    matched_by_shift = True
-                    # Если у старого объекта был статус, переносим его на сместившийся слот
-                    if old_ins and old_ins != "Неизвестно":
-                        insurance = old_ins
-
-            is_frozen = 0
-            is_estate = 0
-
-            # АВТОМАТИЧЕСКОЕ ОПРЕДЕЛЕНИЕ СТРАХОВКИ ПО РАЗНИЦЕ PAYDAY
-            if not insurance or insurance == "Неизвестно":
-                if old_rec:
-                    old_pd, old_time_str = old_rec
+                insurance = "Неизвестно"
+            elif not insurance:
+                old_pd, old_ins, old_time_str = old_rec
+                if old_ins and old_ins != "Неизвестно":
+                    insurance = old_ins
+                else:
                     try:
                         old_time = datetime.strptime(old_time_str, "%d.%m.%Y %H:%M:%S")
                         hours_diff = max(1, int((now - old_time).total_seconds() / 3600))
@@ -107,12 +90,9 @@ async def update_objects(payload: RealtorPayload):
                             insurance = "Неизвестно"
                     except:
                         insurance = "Неизвестно"
-                else:
-                    insurance = "Неизвестно"
 
             fall_time = calculate_fall_time(item.type, item.payday, insurance, now)
 
-            # Сохраняем актуальный объект в таблицу server_objects
             cursor.execute("""
                 INSERT INTO server_objects (server_id, server_name, season, obj_type, slot, payday, insurance_status, exact_fall_time, last_updated, is_frozen, is_h2, is_estate)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)
@@ -124,7 +104,7 @@ async def update_objects(payload: RealtorPayload):
                     last_updated = excluded.last_updated,
                     is_frozen = excluded.is_frozen,
                     is_estate = excluded.is_estate
-            """, (str(payload.server_id), payload.server_name, payload.season, item.type, item.slot, item.payday, insurance, fall_time, now_str, is_frozen, is_estate))
+            """, (str(payload.server_id), payload.server_name, payload.season, item.type, item.slot, item.payday, insurance, fall_time, now_str, 0, 0))
 
             cursor.execute("""
                 INSERT INTO scan_history (server_id, slot, obj_type, payday, recorded_at)
