@@ -1,6 +1,6 @@
 import sqlite3
 import re
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import List, Optional, Any
 from fastapi import FastAPI
 from pydantic import BaseModel
@@ -34,7 +34,7 @@ def calculate_fall_time(obj_type: str, payday_val: int, insurance_status: str, u
         paydays_left = max(0, payday_val - target_pd)
         hours_to_add = paydays_left / drop_per_hour
 
-        # Ближайший ровный час PayDay (если скан в 06:30, то старт расчёта с 07:00)
+        # Ближайший ровный час PayDay (следующий час от момента скана по МСК)
         next_payday = (update_time + timedelta(hours=1)).replace(minute=0, second=0, microsecond=0)
         fall_time = next_payday + timedelta(hours=hours_to_add)
         return fall_time.isoformat()
@@ -48,17 +48,16 @@ async def update_objects(payload: RealtorPayload):
         conn = sqlite3.connect(DB_NAME)
         cursor = conn.cursor()
         
-        # Точный пересчет времени из часового пояса игрока (+7) в Московское время (МСК / UTC+3)
+        # Перевод Unix-timestamp в Московское время (МСК / UTC+3) без сдвигов
         if payload.scan_ts:
-            local_time = datetime.fromtimestamp(payload.scan_ts)
-            now = local_time - timedelta(hours=4)
+            now = (datetime.fromtimestamp(payload.scan_ts, tz=timezone.utc) + timedelta(hours=3)).replace(tzinfo=None)
         else:
-            now = datetime.now()
+            now = (datetime.now(timezone.utc) + timedelta(hours=3)).replace(tzinfo=None)
             
         now_str = now.strftime("%d.%m.%Y %H:%M:%S")
 
         for item in payload.items:
-            # Предотвращаем дубли и баги слотов: сохраняем отдельно Дом и Бизнес по их номеру позиции
+            # Раздельное логирование домов и бизнесов по их слотам
             cursor.execute("""
                 SELECT payday, recorded_at FROM scan_history
                 WHERE server_id = ? AND slot = ? AND obj_type = ?
