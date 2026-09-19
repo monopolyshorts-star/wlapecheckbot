@@ -333,14 +333,10 @@ async def revoke(message: types.Message):
 async def nearest(message: types.Message):
     if not has_access(message.from_user.id):
         return
-    # Считаем текущее время по МСК (UTC+3)
     now = (
         datetime.now(timezone.utc) + timedelta(hours=3)
     ).replace(tzinfo=None)
-    
-    # Чтобы захватить слёты на ближайшие 3 часа (например, если сейчас 7:00, захватываем слёты до 10:00 включительно)
     limit = now + timedelta(hours=3)
-    
     rows = fetch_rows(
         "is_frozen = 0 AND exact_fall_time BETWEEN ? AND ?",
         (now.isoformat(), limit.isoformat()),
