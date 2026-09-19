@@ -24,8 +24,8 @@ class RealtorPayload(BaseModel):
 
 def calculate_fall_time(obj_type: str, payday_val: int, insurance_status: str, update_time: datetime):
     try:
-        # Нестрах падает по 2 PD в час, цель = 3
-        # Страх или Неизвестно падает по 1 PD в час, цель = 2
+        # Если статус Нестрах — падает по 2 PD в час, цель = 3
+        # Если Страх или Неизвестно — падает по 1 PD в час, цель = 2
         is_insured = True
         if insurance_status and "Нестрах" in str(insurance_status):
             is_insured = False
@@ -57,7 +57,6 @@ async def update_objects(payload: RealtorPayload):
         now_str = now.strftime("%d.%m.%Y %H:%M:%S")
 
         for item in payload.items:
-            # Ищем последний скан этого же объекта из истории
             cursor.execute("""
                 SELECT payday, recorded_at FROM scan_history
                 WHERE server_id = ? AND slot = ? AND obj_type = ?
@@ -67,17 +66,18 @@ async def update_objects(payload: RealtorPayload):
 
             is_frozen = 0
             is_estate = 0
-            insurance = item.state  # Если передан явный статус из игры
+            insurance = item.state
 
-            # АВТОМАТИЧЕСКОЕ ОПРЕДЕЛЕНИЕ СТРАХОВКИ ПРИ ПОВТОРНОМ СКАНЕ
-            if not insurance and old_rec:
+            # Если это первый скан (нет истории) — ставим строго "Неизвестно"
+            if not old_rec:
+                insurance = "Неизвестно"
+            elif not insurance:
+                # Если скан повторный, но статус из игры не пришел — вычисляем по разнице PD
                 old_pd, old_time_str = old_rec
                 try:
                     old_time = datetime.strptime(old_time_str, "%d.%m.%Y %H:%M:%S")
                     hours_diff = max(1, int((now - old_time).total_seconds() / 3600))
                     pd_diff = old_pd - item.payday
-                    
-                    # Считаем скорость падения за час
                     drop_speed = pd_diff / hours_diff
                     
                     if drop_speed >= 1.5:
@@ -89,13 +89,8 @@ async def update_objects(payload: RealtorPayload):
                 except:
                     insurance = "Неизвестно"
 
-            # Если это самый первый скан (нет истории) — ставим строго "Неизвестно"
-            if not insurance:
-                insurance = "Неизвестно"
-
             fall_time = calculate_fall_time(item.type, item.payday, insurance, now)
 
-            # Сохранение в базу без затирания свежего статуса
             cursor.execute("""
                 INSERT INTO server_objects (server_id, server_name, season, obj_type, slot, payday, insurance_status, exact_fall_time, last_updated, is_frozen, is_h2, is_estate)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)
