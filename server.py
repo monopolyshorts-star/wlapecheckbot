@@ -3,6 +3,7 @@ import re
 from datetime import datetime, timedelta, timezone
 from typing import List, Optional, Any
 from fastapi import FastAPI
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from database import DB_NAME, init_db
 
@@ -67,13 +68,13 @@ def calculate_fall_time(obj_type: str, payday_val: int, insurance_status: str, u
         fall_time = next_payday + timedelta(hours=hours_to_add)
         return fall_time.isoformat()
     except Exception as e:
-        print(f"[Calc Error] {e}")
+        print(f"[Calc Error] {e}", flush=True)
         return None
 
 @app.post("/api/update")
 async def update_objects(payload: RealtorPayload):
     try:
-        print(f"[API] Получен запрос от сервера {payload.server_name} ({payload.server_id}), объектов: {len(payload.items)}")
+        print(f"[API] Принят пакет: сервер {payload.server_name} [{payload.server_id}], объектов: {len(payload.items)}", flush=True)
         conn = sqlite3.connect(DB_NAME)
         cursor = conn.cursor()
         
@@ -129,9 +130,14 @@ async def update_objects(payload: RealtorPayload):
 
             fall_time = calculate_fall_time(item.type, item.payday, insurance, now)
 
+            # Ровно 13 колонок и ровно 13 значений (10 параметров + 3 нуля)
             cursor.execute("""
-                INSERT INTO server_objects (server_id, server_name, season, obj_type, slot, house_id, payday, insurance_status, exact_fall_time, last_updated, is_frozen, is_h2, is_estate)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0)
+                INSERT INTO server_objects (
+                    server_id, server_name, season, obj_type, slot, house_id, 
+                    payday, insurance_status, exact_fall_time, last_updated, 
+                    is_frozen, is_h2, is_estate
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 0)
                 ON CONFLICT(server_id, slot, obj_type) DO UPDATE SET
                     payday = excluded.payday,
                     house_id = COALESCE(excluded.house_id, server_objects.house_id),
@@ -141,7 +147,11 @@ async def update_objects(payload: RealtorPayload):
                     last_updated = excluded.last_updated,
                     is_frozen = excluded.is_frozen,
                     is_estate = excluded.is_estate
-            """, (str(payload.server_id), payload.server_name, active_season, item.type, item.slot, item.house_id, item.payday, insurance, fall_time, now_str))
+            """, (
+                str(payload.server_id), payload.server_name, active_season, 
+                item.type, item.slot, item.house_id, item.payday, insurance, 
+                fall_time, now_str
+            ))
 
             cursor.execute("""
                 INSERT INTO scan_history (server_id, slot, obj_type, payday, recorded_at)
@@ -150,8 +160,8 @@ async def update_objects(payload: RealtorPayload):
 
         conn.commit()
         conn.close()
-        print(f"[API] Успешно сохранено объектов для сервера {payload.server_id}: {len(payload.items)}")
+        print(f"[API УСПЕХ] Сервер {payload.server_name} обновлен: {len(payload.items)} записей!", flush=True)
         return {"status": "success", "count": len(payload.items)}
     except Exception as e:
-        print(f"[API Error] {e}")
-        return {"status": "error", "message": str(e)}, 500
+        print(f"[API КРИТИЧЕСКАЯ ОШИБКА] {e}", flush=True)
+        return JSONResponse(status_code=500, content={"status": "error", "message": str(e)})
