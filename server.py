@@ -15,6 +15,7 @@ def read_root():
 
 class RealtorItem(BaseModel):
     slot: int
+    house_id: Optional[int] = None
     payday: int
     type: str
     state: Optional[str] = None
@@ -58,6 +59,13 @@ async def update_objects(payload: RealtorPayload):
         conn = sqlite3.connect(DB_NAME)
         cursor = conn.cursor()
         
+        # Добавляем колонку house_id в таблицу server_objects, если её еще нет
+        try:
+            cursor.execute("ALTER TABLE server_objects ADD COLUMN house_id INTEGER;")
+            conn.commit()
+        except:
+            pass
+
         if payload.scan_ts:
             now = (datetime.fromtimestamp(payload.scan_ts, tz=timezone.utc) + timedelta(hours=3)).replace(tzinfo=None)
         else:
@@ -65,7 +73,6 @@ async def update_objects(payload: RealtorPayload):
             
         now_str = now.strftime("%d.%m.%Y %H:%M:%S")
 
-        # Проверяем, не задан ли принудительно сезон администратором
         cursor.execute("SELECT season FROM manual_seasons WHERE server_id = ?", (str(payload.server_id),))
         m_season = cursor.fetchone()
         active_season = m_season[0] if m_season and m_season[0] else payload.season
@@ -114,17 +121,18 @@ async def update_objects(payload: RealtorPayload):
             fall_time = calculate_fall_time(item.type, item.payday, insurance, now)
 
             cursor.execute("""
-                INSERT INTO server_objects (server_id, server_name, season, obj_type, slot, payday, insurance_status, exact_fall_time, last_updated, is_frozen, is_h2, is_estate)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)
+                INSERT INTO server_objects (server_id, server_name, season, obj_type, slot, house_id, payday, insurance_status, exact_fall_time, last_updated, is_frozen, is_h2, is_estate)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0)
                 ON CONFLICT(server_id, slot, obj_type) DO UPDATE SET
                     payday = excluded.payday,
+                    house_id = COALESCE(excluded.house_id, server_objects.house_id),
                     insurance_status = excluded.insurance_status,
                     season = excluded.season,
                     exact_fall_time = excluded.exact_fall_time,
                     last_updated = excluded.last_updated,
                     is_frozen = excluded.is_frozen,
                     is_estate = excluded.is_estate
-            """, (str(payload.server_id), payload.server_name, active_season, item.type, item.slot, item.payday, insurance, fall_time, now_str, 0, 0))
+            """, (str(payload.server_id), payload.server_name, active_season, item.type, item.slot, item.house_id, item.payday, insurance, fall_time, now_str))
 
             cursor.execute("""
                 INSERT INTO scan_history (server_id, slot, obj_type, payday, recorded_at)
