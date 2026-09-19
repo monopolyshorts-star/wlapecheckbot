@@ -48,8 +48,8 @@ class RealtorPayload(BaseModel):
 def get_payday_slot_hour(dt: datetime) -> datetime:
     """
     Определяет часовой интервал PayDay:
-    Если время 17:55 - 17:59, оно относится к часу 17:00 (до пейдея в :00).
-    Если 18:00 - 18:54, относится к 18:00.
+    17:55 - 17:59 -> относится к часу 17:00.
+    18:00 - 18:54 -> относится к 18:00.
     """
     return dt.replace(minute=0, second=0, microsecond=0)
 
@@ -104,7 +104,6 @@ async def update_objects(payload: RealtorPayload):
         active_season = m_season[0] if m_season and m_season[0] else payload.season
 
         # Получаем данные последнего предыдущего скана для этого сервера
-        # Ищем самый свежий временной штамп, исключая текущую минуту
         cursor.execute("""
             SELECT recorded_at FROM scan_history 
             WHERE server_id = ?
@@ -112,8 +111,8 @@ async def update_objects(payload: RealtorPayload):
         """, (str(payload.server_id),))
         last_global_row = cursor.fetchone()
 
-        last_scan_items = {} # ключ: house_id или slot -> {payday, insurance, recorded_at}
-        last_scan_by_pd = {}  # ключ: pd -> список {slot, house_id, payday, insurance}
+        last_scan_items = {}
+        last_scan_by_pd = {}
         hours_diff = 0
 
         if last_global_row and last_global_row[0]:
@@ -121,20 +120,16 @@ async def update_objects(payload: RealtorPayload):
                 last_time_str = last_global_row[0]
                 last_dt = datetime.strptime(last_time_str, "%d.%m.%Y %H:%M:%S")
                 
-                # Считаем разницу именно по границам PayDay (:00 часов)
                 current_slot = get_payday_slot_hour(now)
                 prev_slot = get_payday_slot_hour(last_dt)
                 
                 diff_hours_calc = int(round((current_slot - prev_slot).total_seconds() / 3600.0))
                 
-                # Если прошло от 1 до 24 часов - это легитимный следующий скан для расчета разницы!
-                # Если 0 часов (тот же час, например 17:10 и 17:25) -> hours_diff = 0
                 if 1 <= diff_hours_calc <= 24:
                     hours_diff = diff_hours_calc
                 else:
                     hours_diff = 0
 
-                # Выбираем все записи, сделанные именно в тот последний скан (в пределах 60 сек от того времени)
                 cursor.execute("""
                     SELECT sh.slot, sh.obj_type, sh.payday, so.house_id, so.insurance_status
                     FROM scan_history sh
@@ -157,25 +152,39 @@ async def update_objects(payload: RealtorPayload):
             except Exception as e:
                 print(f"[History Load Error] {e}", flush=True)
 
+        # -------------------------------------------------------------
+        # КЛЮЧЕВОЕ ИСПРАВЛЕНИЕ:
+        # Удаляем "хвосты" - старые позиции, которые слетели или отсутствуют в новом пакете
+        # -------------------------------------------------------------
+        distinct_types = set(item.type for item in payload.items)
+        for obj_type in distinct_types:
+            type_slots = [item.slot for item in payload.items if item.type == obj_type]
+            if type_slots:
+                placeholders = ",".join("?" for _ in type_slots)
+                cursor.execute(f"""
+                    DELETE FROM server_objects 
+                    WHERE server_id = ? AND obj_type = ? AND slot NOT IN ({placeholders})
+                """, [str(payload.server_id), obj_type] + type_slots)
+
         matched_prev_items = set()
 
         for item in payload.items:
             insurance = item.state
             matched_prev = None
 
-            # 1. Если есть точный house_id (скорострелы) -> сопоставляем по ID
+            # 1. Точное сопоставление по house_id (скорострелы)
             if item.house_id and (item.type, "hid", item.house_id) in last_scan_items:
                 matched_prev = last_scan_items[(item.type, "hid", item.house_id)]
 
-            # 2. Если тот же час (hours_diff == 0), просто сохраняем предыдущий статус по позиции
+            # 2. Тот же час (повторный скан без смены PayDay)
             elif hours_diff == 0 and (item.type, "slot", item.slot) in last_scan_items:
                 prev = last_scan_items[(item.type, "slot", item.slot)]
                 if prev["payday"] == item.payday:
                     matched_prev = prev
 
-            # 3. Если сменился час (прошел 1 или несколько PayDay), ищем сопоставление с учетом сдвига
+            # 3. Следующий PayDay (прошел 1 или несколько часов)
             elif hours_diff > 0:
-                # А) Сначала смотрим по тому же слоту
+                # А) По тому же слоту
                 candidate = last_scan_items.get((item.type, "slot", item.slot))
                 if candidate and id(candidate) not in matched_prev_items:
                     drop = candidate["payday"] - item.payday
@@ -183,8 +192,7 @@ async def update_objects(payload: RealtorPayload):
                     if any(drop == rate * hours_diff for rate in expected_rates):
                         matched_prev = candidate
 
-                # Б) Если по тому же слоту не подошло (добавился новый дом сверху, список сместился),
-                # ищем среди старых домов тот, у которого PayDay уменьшился ровно на правильную скорость!
+                # Б) Со смещением позиций
                 if not matched_prev:
                     expected_rates = [1, 2] if item.type == "Дом" else [1, 2, 4]
                     for rate in expected_rates:
@@ -197,11 +205,10 @@ async def update_objects(payload: RealtorPayload):
                         if matched_prev:
                             break
 
-            # 4. Вычисляем статус страховки
+            # Определение статуса страховки
             if matched_prev:
                 matched_prev_items.add(id(matched_prev))
                 
-                # Если у найденного старого дома статус уже был определен ранее -> переносим его!
                 if matched_prev.get("insurance") and matched_prev["insurance"] != "Неизвестно":
                     insurance = matched_prev["insurance"]
                 elif hours_diff > 0:
@@ -225,13 +232,12 @@ async def update_objects(payload: RealtorPayload):
                         else:
                             insurance = "Неизвестно"
             else:
-                # Если объект новый или скан первый -> строго "Неизвестно"
                 if not insurance:
                     insurance = "Неизвестно"
 
             fall_time = calculate_fall_time(item.type, item.payday, insurance, now)
 
-            # Сохраняем в таблицу объектов
+            # Сохраняем актуальный объект
             cursor.execute("""
                 INSERT INTO server_objects (
                     server_id, server_name, season, obj_type, slot, house_id, 
@@ -254,7 +260,7 @@ async def update_objects(payload: RealtorPayload):
                 fall_time, now_str
             ))
 
-            # Записываем срез в историю
+            # Записываем в историю
             cursor.execute("""
                 INSERT INTO scan_history (server_id, slot, obj_type, payday, recorded_at)
                 VALUES (?, ?, ?, ?, ?)
