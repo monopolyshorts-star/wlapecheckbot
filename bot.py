@@ -16,7 +16,7 @@ from aiogram.types import (
 
 from database import DB_NAME, init_db
 
-TOKEN = "BOT_TOKEN"
+TOKEN = "8480773029:AAGO1I2nYPGc8agez0UJziFm1qx0YBEUGAo"
 ADMIN_IDS = {1321937398}
 
 init_db()
