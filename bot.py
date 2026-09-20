@@ -111,14 +111,20 @@ def keyboard(user_id: int):
 
 
 def status_name(value):
-    return {
-        "Страх": "Застраховано",
-        "Нестрах": "Не застраховано",
-        "Страх, Занят": "Застраховано, есть занятость",
-        "Страх, Незанят": "Застраховано, нет занятости",
-        "Нестрах, Без занятости": "Не застраховано, без занятости",
+    mapping = {
+        "Страх": "Страх",
+        "Застраховано": "Страх",
+        "Нестрах": "Не страх",
+        "Не застраховано": "Не страх",
+        "Страх, Занят": "Страх, Занят",
+        "Застраховано, есть занятость": "Страх, Занят",
+        "Страх, Незанят": "Страх, Без занят",
+        "Застраховано, нет занятости": "Страх, Без занят",
+        "Нестрах, Без занятости": "Не страх, Без занят",
+        "Не застраховано, без занятости": "Не страх, Без занят",
         "Неизвестно": "Неизвестно",
-    }.get(value or "Неизвестно", "Неизвестно")
+    }
+    return mapping.get(value or "Неизвестно", "Неизвестно")
 
 
 def get_season_icon(season_name):
@@ -153,10 +159,9 @@ def fetch_rows(where="", params=()):
 
 
 # -------------------------------------------------------------
-# БЛИЖАЙШИЕ / ВСЕ СЛЁТЫ (СТРОГО ТОЧНО ИЗВЕСТНЫЕ СТАТУСЫ)
+# БЛИЖАЙШИЕ / ВСЕ СЛЁТЫ (ИДЕАЛЬНАЯ ДРЕВОВИДНАЯ СТРУКТУРА)
 # -------------------------------------------------------------
 def format_falls(rows, header_title):
-    # Фильтруем: исключаем объекты со статусом "Неизвестно"
     known_rows = [r for r in rows if r[7] and r[7] != "Неизвестно"]
 
     if not known_rows:
@@ -200,58 +205,52 @@ def format_falls(rows, header_title):
             total_biz += 1
 
         active_season = manual_dict.get(str(server_id)) or season or "Неизвестно"
-        key = (dt.strftime("%H:00"), server_id, server_name, active_season)
-        grouped.setdefault(key, {"Дом": [], "Бизнес": []})[obj_type].append(row)
+        hour_key = dt.strftime("%H:00")
+        
+        hour_dict = grouped.setdefault(hour_key, {})
+        srv_dict = hour_dict.setdefault((server_id, server_name, active_season), {"Дом": [], "Бизнес": []})
+        srv_dict[obj_type].append(row)
 
     if not grouped:
         return f"{header_title}\n\n⚠️ Точно известных слётов с рассчитанным временем не обнаружено."
 
     top_header = f"{header_title}\n🏠×{total_houses} 🏢×{total_biz}"
-
     body_lines = []
-    current_hour = None
 
-    for (hour, server_id, server_name, season), groups in sorted(grouped.items(), key=lambda x: (x[0][0], x[0][2])):
-        hour_prefix = ""
-        if hour != current_hour:
-            body_lines.append(f"└─⚡ Слёты в {hour}:")
-            current_hour = hour
-            hour_prefix = "   "
-        else:
-            hour_prefix = "   "
+    for hour in sorted(grouped.keys()):
+        body_lines.append(f"└─⚡ Слёты в {hour}:")
+        srv_list = sorted(grouped[hour].items(), key=lambda x: x[0][1])
 
-        icon_emoji = get_season_icon(season)
-        body_lines.append(f"{hour_prefix}├──🌐 Сервер {server_name.upper()} {icon_emoji}")
+        for s_idx, ((server_id, server_name, season), cat_groups) in enumerate(srv_list):
+            is_last_server = (s_idx == len(srv_list) - 1)
+            s_prefix = "   └──" if is_last_server else "   ├──"
+            s_line_bar = "      " if is_last_server else "   │  "
 
-        # Обработка домов
-        houses = groups["Дом"]
-        if houses:
-            body_lines.append(f"{hour_prefix}│  └──📍 Дома:")
-            for idx, r in enumerate(sorted(houses, key=lambda x: x[4])):
-                slot, house_id, payday, status = r[4], r[5], r[6], r[7]
-                info = status_name(status)
-                is_last = (idx == len(houses) - 1)
-                tree_char = "└──" if is_last else "├──"
+            icon_emoji = get_season_icon(season)
+            body_lines.append(f"{s_prefix}🌐 Сервер {server_name.upper()} {icon_emoji}")
 
-                if house_id:
-                    body_lines.append(f"{hour_prefix}│     {tree_char}id {house_id} (PayDay: {payday}) - {info}")
-                else:
-                    body_lines.append(f"{hour_prefix}│     {tree_char}pos {slot} (PayDay: {payday}) - {info}")
+            categories = []
+            if cat_groups["Дом"]:
+                categories.append(("Дом", "📍 Дома:", cat_groups["Дом"]))
+            if cat_groups["Бизнес"]:
+                categories.append(("Бизнес", "⭐ Бизнесы ⭐:", cat_groups["Бизнес"]))
 
-        # Обработка бизнесов
-        bizs = groups["Бизнес"]
-        if bizs:
-            body_lines.append(f"{hour_prefix}│  └──⭐ Бизнесы ⭐:")
-            for idx, r in enumerate(sorted(bizs, key=lambda x: x[4])):
-                slot, house_id, payday, status = r[4], r[5], r[6], r[7]
-                info = status_name(status)
-                is_last = (idx == len(bizs) - 1)
-                tree_char = "└──" if is_last else "├──"
+            for c_idx, (kind, cat_title, items) in enumerate(categories):
+                is_last_cat = (c_idx == len(categories) - 1)
+                c_prefix = "└──" if is_last_cat else "├──"
+                c_line_bar = "   " if is_last_cat else "│  "
 
-                if house_id:
-                    body_lines.append(f"{hour_prefix}│     {tree_char}id {house_id} (PayDay: {payday}) - {info}")
-                else:
-                    body_lines.append(f"{hour_prefix}│     {tree_char}pos {slot} (PayDay: {payday}) - {info}")
+                body_lines.append(f"{s_line_bar}{c_prefix}{cat_title}")
+
+                sorted_items = sorted(items, key=lambda x: x[4])
+                for i_idx, r in enumerate(sorted_items):
+                    slot, house_id, payday, status = r[4], r[5], r[6], r[7]
+                    info = status_name(status)
+                    is_last_item = (i_idx == len(sorted_items) - 1)
+                    i_prefix = "└──" if is_last_item else "├──"
+
+                    item_label = f"id {house_id}" if house_id else f"pos {slot}"
+                    body_lines.append(f"{s_line_bar}{c_line_bar}{i_prefix}{item_label} (PayDay: {payday}) - {info}")
 
         body_lines.append("")
 
@@ -478,7 +477,6 @@ async def wakeup(message: types.Message):
     if not has_access(message.from_user.id):
         return
     rows = fetch_rows("is_frozen = 0")
-    # Только точно известные
     known = [r for r in rows if r[7] and r[7] != "Неизвестно"]
     grouped = {}
     for row in known:
