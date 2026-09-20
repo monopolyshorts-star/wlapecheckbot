@@ -159,7 +159,7 @@ def fetch_rows(where="", params=()):
 
 
 # -------------------------------------------------------------
-# БЛИЖАЙШИЕ / ВСЕ СЛЁТЫ (ИДЕАЛЬНАЯ ФИКСИРОВАННАЯ СЕТКА)
+# БЛИЖАЙШИЕ / ВСЕ СЛЁТЫ (ОБНОВЛЕННАЯ ШИРОКАЯ СЕТКА)
 # -------------------------------------------------------------
 def format_falls(rows, header_title):
     known_rows = [r for r in rows if r[7] and r[7] != "Неизвестно"]
@@ -206,12 +206,10 @@ def format_falls(rows, header_title):
         body_lines.append(f"└─⚡️ Слёты в {hour}:")
         srv_list = sorted(grouped[hour].items(), key=lambda x: x[0][1])
 
-        several_servers = len(srv_list) > 1
-
         for s_idx, ((server_id, server_name, season), cat_groups) in enumerate(srv_list):
             is_last_server = (s_idx == len(srv_list) - 1)
             
-            # Уровень 1: Сервер (7 пробелов)
+            # Уровень 1: Сервер (7 пробелов - под молнию)
             s_branch = "       └─" if is_last_server else "       ├─"
             icon_emoji = get_season_icon(season)
             body_lines.append(f"{s_branch}🌐 Сервер {server_name.upper()} {icon_emoji}")
@@ -223,8 +221,8 @@ def format_falls(rows, header_title):
             for c_idx, (cat_title, items) in enumerate(categories):
                 is_last_cat = (c_idx == len(categories) - 1)
                 
-                # Уровень 2: Категория (13 пробелов - ровно под 🌐)
-                c_branch = "             └─" if is_last_cat else "             ├─"
+                # Уровень 2: Категория (15 пробелов - сдвиг вправо)
+                c_branch = "               └─" if is_last_cat else "               ├─"
                 body_lines.append(f"{c_branch}{cat_title}")
 
                 sorted_items = sorted(items, key=lambda x: x[4])
@@ -233,8 +231,8 @@ def format_falls(rows, header_title):
                     info = status_name(status)
                     is_last_item = (i_idx == len(sorted_items) - 1)
                     
-                    # Уровень 3: Имущество (19 пробелов - ровно под 📍)
-                    i_branch = "                   └─" if is_last_item else "                   ├─"
+                    # Уровень 3: Имущество (23 пробела - широкий отступ)
+                    i_branch = "                       └─" if is_last_item else "                       ├─"
                     label = f"id {house_id}" if house_id else f"pos {slot}"
                     body_lines.append(f"{i_branch}{label} (PayDay: {payday}) - {info}")
 
