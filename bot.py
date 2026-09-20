@@ -159,7 +159,7 @@ def fetch_rows(where="", params=()):
 
 
 # -------------------------------------------------------------
-# БЛИЖАЙШИЕ / ВСЕ СЛЁТЫ (МАТЕМАТИЧЕСКИ ТОЧНЫЕ ОТСТУПЫ)
+# БЛИЖАЙШИЕ / ВСЕ СЛЁТЫ (ТОЧНАЯ ПОДГОНКА ОТСТУПОВ)
 # -------------------------------------------------------------
 def format_falls(rows, header_title):
     known_rows = [r for r in rows if r[7] and r[7] != "Неизвестно"]
@@ -226,9 +226,8 @@ def format_falls(rows, header_title):
         for s_idx, ((server_id, server_name, season), cat_groups) in enumerate(srv_list):
             is_last_server = (s_idx == len(srv_list) - 1)
             
-            # СТРОГО 7 ПРОБЕЛОВ ДЛЯ СЕРВЕРА
+            # Сервер (7 пробелов)
             s_pref = "       └─" if is_last_server else "       ├─"
-            # Линия связи под сервером
             s_bar = "       │  " if several_servers and not is_last_server else "          "
 
             icon_emoji = get_season_icon(season)
@@ -243,13 +242,12 @@ def format_falls(rows, header_title):
             for c_idx, (cat_title, items) in enumerate(categories):
                 is_last_cat = (c_idx == len(categories) - 1)
                 
-                # СТРОГО 11 ПРОБЕЛОВ ДЛЯ КАТЕГОРИИ (7+4)
-                c_pref = "   └─" if is_last_cat else "   ├─"
+                # Категория (сдвинута вправо на 2 символа)
+                c_pref = "       └─" if is_last_cat else "       ├─"
                 c_full_line = f"{s_bar}{c_pref}{cat_title}"
                 body_lines.append(c_full_line)
 
-                # Линия связи под категорией
-                c_bar = "   │  " if not is_last_cat else "      "
+                c_bar = "       │  " if not is_last_cat else "          "
 
                 sorted_items = sorted(items, key=lambda x: x[4])
                 for i_idx, r in enumerate(sorted_items):
@@ -257,8 +255,8 @@ def format_falls(rows, header_title):
                     info = status_name(status)
                     is_last_item = (i_idx == len(sorted_items) - 1)
                     
-                    # СТРОГО 14 ПРОБЕЛОВ ДЛЯ ПОЗИЦИИ (11+3)
-                    i_pref = "   └─" if is_last_item else "   ├─"
+                    # Позиции (сдвинуты вправо на 2 символа)
+                    i_pref = "       └─" if is_last_item else "       ├─"
                     
                     item_label = f"id {house_id}" if house_id else f"pos {slot}"
                     body_lines.append(f"{s_bar}{c_bar}{i_pref}{item_label} (PayDay: {payday}) - {info}")
