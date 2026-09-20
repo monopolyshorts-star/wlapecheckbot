@@ -159,7 +159,7 @@ def fetch_rows(where="", params=()):
 
 
 # -------------------------------------------------------------
-# БЛИЖАЙШИЕ / ВСЕ СЛЁТЫ (ИДЕАЛЬНАЯ ДРЕВОВИДНАЯ СТРУКТУРА)
+# СТРУКТУРА "СИНИЙ СКРИНШОТ" (ГРУППИРОВКА ПО ЧАСАМ, БЕЗ СЕРВЕРОВ НАВЕРХУ)
 # -------------------------------------------------------------
 def format_falls(rows, header_title):
     known_rows = [r for r in rows if r[7] and r[7] != "Неизвестно"]
@@ -207,6 +207,7 @@ def format_falls(rows, header_title):
         active_season = manual_dict.get(str(server_id)) or season or "Неизвестно"
         hour_key = dt.strftime("%H:00")
         
+        # Структура: hour -> (server_id, server_name, season) -> obj_type -> items
         hour_dict = grouped.setdefault(hour_key, {})
         srv_dict = hour_dict.setdefault((server_id, server_name, active_season), {"Дом": [], "Бизнес": []})
         srv_dict[obj_type].append(row)
@@ -244,13 +245,23 @@ def format_falls(rows, header_title):
 
                 sorted_items = sorted(items, key=lambda x: x[4])
                 for i_idx, r in enumerate(sorted_items):
-                    slot, house_id, payday, status = r[4], r[5], r[6], r[7]
+                    slot, house_id, payday, status, fall_time = r[4], r[5], r[6], r[7], r[8]
                     info = status_name(status)
                     is_last_item = (i_idx == len(sorted_items) - 1)
                     i_prefix = "└──" if is_last_item else "├──"
 
                     item_label = f"id {house_id}" if house_id else f"pos {slot}"
-                    body_lines.append(f"{s_line_bar}{c_line_bar}{i_prefix}{item_label} (PayDay: {payday}) - {info}")
+                    
+                    # Точное время слёта дома/бизнеса (как на синем скрине)
+                    time_str = ""
+                    if fall_time:
+                        try:
+                            dt = datetime.fromisoformat(fall_time)
+                            time_str = f" | ⏰ {dt.strftime('%H:%M')}"
+                        except:
+                            pass
+
+                    body_lines.append(f"{s_line_bar}{c_line_bar}{i_prefix}{item_label} (PayDay: {payday}) - {info}{time_str}")
 
         body_lines.append("")
 
@@ -259,7 +270,7 @@ def format_falls(rows, header_title):
 
 
 # -------------------------------------------------------------
-# ПО СЕРВЕРУ (ПОЛНЫЙ СПИСОК С НЕИЗВЕСТНЫМИ ВНУТРИ ЦИТАТЫ)
+# ПО СЕРВЕРУ (ПОЛНЫЙ СПИСОК В ЦИТАТЕ)
 # -------------------------------------------------------------
 def format_server_compact(rows, server_id, server_name):
     conn = db()
@@ -473,7 +484,7 @@ async def status(message: types.Message):
 
 
 @dp.message(F.text.in_({"😴 Стоит проснуться", "Стоит проснуться"}))
-async def wakeup(message: types.Message):
+-> async def wakeup(message: types.Message):
     if not has_access(message.from_user.id):
         return
     rows = fetch_rows("is_frozen = 0")
@@ -489,7 +500,7 @@ async def wakeup(message: types.Message):
 
 
 async def main():
-    await dp.start_polling(bot)
+    await dp.start_polling(daemon=True)
 
 
 if __name__ == "__main__":
