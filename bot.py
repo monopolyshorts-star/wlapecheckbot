@@ -159,7 +159,7 @@ def fetch_rows(where="", params=()):
 
 
 # -------------------------------------------------------------
-# БЛИЖАЙШИЕ / ВСЕ СЛЁТЫ (ТОЧНАЯ ПОДГОНКА ОТСТУПОВ)
+# БЛИЖАЙШИЕ / ВСЕ СЛЁТЫ (КЛАССИЧЕСКАЯ КОМПАКТНАЯ СТРУКТУРА)
 # -------------------------------------------------------------
 def format_falls(rows, header_title):
     known_rows = [r for r in rows if r[7] and r[7] != "Неизвестно"]
@@ -177,32 +177,17 @@ def format_falls(rows, header_title):
 
     for row in known_rows:
         (
-            server_name,
-            server_id,
-            season,
-            obj_type,
-            slot,
-            house_id,
-            payday,
-            status,
-            fall_time,
-            frozen,
-            is_h2,
-            is_estate,
+            server_name, server_id, season, obj_type, slot, house_id, payday, 
+            status, fall_time, frozen, is_h2, is_estate
         ) = row
 
-        if not fall_time:
-            continue
-
+        if not fall_time: continue
         try:
             dt = datetime.fromisoformat(fall_time)
-        except (ValueError, TypeError):
-            continue
+        except: continue
 
-        if obj_type == "Дом":
-            total_houses += 1
-        elif obj_type == "Бизнес":
-            total_biz += 1
+        if obj_type == "Дом": total_houses += 1
+        elif obj_type == "Бизнес": total_biz += 1
 
         active_season = manual_dict.get(str(server_id)) or season or "Неизвестно"
         hour_key = dt.strftime("%H:00")
@@ -212,7 +197,7 @@ def format_falls(rows, header_title):
         srv_dict[obj_type].append(row)
 
     if not grouped:
-        return f"{header_title}\n\n⚠️ Точно известных слётов с рассчитанным временем не обнаружено."
+        return f"{header_title}\n\n⚠️ Слётов не обнаружено."
 
     top_header = f"{header_title}\n🏠×{total_houses} 🏢×{total_biz}"
     body_lines = []
@@ -221,33 +206,26 @@ def format_falls(rows, header_title):
         body_lines.append(f"└─⚡️ Слёты в {hour}:")
         srv_list = sorted(grouped[hour].items(), key=lambda x: x[0][1])
 
-        several_servers = len(srv_list) > 1
-
         for s_idx, ((server_id, server_name, season), cat_groups) in enumerate(srv_list):
             is_last_server = (s_idx == len(srv_list) - 1)
             
-            # Сервер (7 пробелов)
-            s_pref = "       └─" if is_last_server else "       ├─"
-            s_bar = "       │  " if several_servers and not is_last_server else "          "
-
+            # Ветка сервера (шаг 3 пробела)
+            s_branch = "└─" if is_last_server else "├─"
+            s_bar   = "   " if is_last_server else "│  "
             icon_emoji = get_season_icon(season)
-            body_lines.append(f"{s_pref}🌐 Сервер {server_name.upper()} {icon_emoji}")
+            body_lines.append(f"   {s_branch}🌐 Сервер {server_name.upper()} {icon_emoji}")
 
             categories = []
-            if cat_groups["Дом"]:
-                categories.append(("📍 Дома:", cat_groups["Дом"]))
-            if cat_groups["Бизнес"]:
-                categories.append(("⭐ Бизнесы ⭐:", cat_groups["Бизнес"]))
+            if cat_groups["Дом"]: categories.append(("Дом", "📍 Дома:", cat_groups["Дом"]))
+            if cat_groups["Бизнес"]: categories.append(("Бизнес", "⭐ Бизнесы ⭐:", cat_groups["Бизнес"]))
 
-            for c_idx, (cat_title, items) in enumerate(categories):
+            for c_idx, (kind, cat_title, items) in enumerate(categories):
                 is_last_cat = (c_idx == len(categories) - 1)
                 
-                # Категория (сдвинута вправо на 2 символа)
-                c_pref = "       └─" if is_last_cat else "       ├─"
-                c_full_line = f"{s_bar}{c_pref}{cat_title}"
-                body_lines.append(c_full_line)
-
-                c_bar = "       │  " if not is_last_cat else "          "
+                # Ветка категории (шаг 3 + 3 = 6 пробелов)
+                c_branch = "└─" if is_last_cat else "├─"
+                c_bar   = "   " if is_last_cat else "│  "
+                body_lines.append(f"   {s_bar}{c_branch}{cat_title}")
 
                 sorted_items = sorted(items, key=lambda x: x[4])
                 for i_idx, r in enumerate(sorted_items):
@@ -255,11 +233,10 @@ def format_falls(rows, header_title):
                     info = status_name(status)
                     is_last_item = (i_idx == len(sorted_items) - 1)
                     
-                    # Позиции (сдвинуты вправо на 2 символа)
-                    i_pref = "       └─" if is_last_item else "       ├─"
-                    
-                    item_label = f"id {house_id}" if house_id else f"pos {slot}"
-                    body_lines.append(f"{s_bar}{c_bar}{i_pref}{item_label} (PayDay: {payday}) - {info}")
+                    # Ветка имущества (шаг 6 + 3 = 9 пробелов)
+                    i_branch = "└─" if is_last_item else "├─"
+                    label = f"id {house_id}" if house_id else f"pos {slot}"
+                    body_lines.append(f"   {s_bar}{c_bar}{i_branch}{label} (PayDay: {payday}) - {info}")
 
         body_lines.append("")
 
@@ -268,238 +245,145 @@ def format_falls(rows, header_title):
 
 
 # -------------------------------------------------------------
-# ПО СЕРВЕРУ (ПОЛНЫЙ СПИСОК В ЦИТАТЕ)
+# ПО СЕРВЕРУ
 # -------------------------------------------------------------
 def format_server_compact(rows, server_id, server_name):
     conn = db()
     m_row = conn.execute("SELECT season FROM manual_seasons WHERE server_id = ?", (str(server_id),)).fetchone()
     conn.close()
 
-    season = "Неизвестно"
-    if m_row and m_row[0]:
-        season = m_row[0]
-    elif rows and rows[0][2]:
-        season = rows[0][2]
-
-    season_icon = get_season_icon(season)
+    season = m_row[0] if m_row and m_row[0] else (rows[0][2] if rows else "Неизвестно")
+    icon = get_season_icon(season)
 
     if not rows:
-        return f"🌐 <b>Сервер {server_name.upper()}[{server_id}]</b>\n<blockquote>└─ Сезон 🌐 \"<b>{season.upper()}</b>\" {season_icon}\n\n⚠️ Активных объектов не обнаружено.</blockquote>"
+        return f"🌐 <b>Сервер {server_name.upper()}[{server_id}]</b>\n<blockquote>└─ Сезон 🌐 \"<b>{season.upper()}</b>\" {icon}\n\n⚠️ Активных объектов не обнаружено.</blockquote>"
 
-    result = [
-        f"└─ Сезон 🌐 \"{season.upper()}\" {season_icon}",
-    ]
-
+    result = [f"└─ Сезон 🌐 \"{season.upper()}\" {icon}"]
     houses = [r for r in rows if r[3] == "Дом"]
     businesses = [r for r in rows if r[3] == "Бизнес"]
 
     if houses:
         result.append("└─ 🏠 Дома:")
         for r in sorted(houses, key=lambda x: x[4]):
-            _, _, _, _, slot, house_id, payday, status, fall_time, _, _, is_estate = r
-            info = status_name(status)
-            if is_estate:
-                info += " (🔒 С поместьем)"
-            time_str = ""
-            if fall_time:
-                try:
-                    dt = datetime.fromisoformat(fall_time)
-                    time_str = f" | ⏰ {dt.strftime('%H:%M')}"
-                except:
-                    pass
-            
-            prefix = f"id {house_id}" if house_id else f"pos {slot}"
-            result.append(f"   {prefix} (PayDay: {payday}) - {info}{time_str}")
+            prefix = f"id {r[5]}" if r[5] else f"pos {r[4]}"
+            result.append(f"   {prefix} (PayDay: {r[6]}) - {status_name(r[7])}")
 
     if businesses:
         result.append("└─ ✨ Бизнесы:")
         for r in sorted(businesses, key=lambda x: x[4]):
-            _, _, _, _, slot, house_id, payday, status, fall_time, _, _, is_estate = r
-            info = status_name(status)
-            time_str = ""
-            if fall_time:
-                try:
-                    dt = datetime.fromisoformat(fall_time)
-                    time_str = f" | ⏰ {dt.strftime('%H:%M')}"
-                except:
-                    pass
-            prefix = f"id {house_id}" if house_id else f"pos {slot}"
-            result.append(f"   {prefix} (PayDay: {payday}) - {info}{time_str}")
+            prefix = f"id {r[5]}" if r[5] else f"pos {r[4]}"
+            result.append(f"   {prefix} (PayDay: {r[6]}) - {status_name(r[7])}")
 
-    header = f"🌐 <b>Сервер {server_name.upper()}[{server_id}]</b>"
-    quote_body = "\n".join(result)
-    return f"{header}\n<blockquote>{quote_body}</blockquote>"
+    return f"🌐 <b>Сервер {server_name.upper()}</b>\n<blockquote>" + "\n".join(result) + "</blockquote>"
 
 
 @dp.message(Command("start"))
 async def start(message: types.Message):
     if not has_access(message.from_user.id):
-        await message.answer("🔒 У вас нет доступа к боту.")
+        await message.answer("🔒 У вас нет доступа.")
         return
-    await message.answer(
-        "👋 <b>Arizona Tracker</b>",
-        reply_markup=keyboard(message.from_user.id),
-        parse_mode="HTML",
-    )
+    await message.answer("👋 <b>Arizona Tracker</b>", reply_markup=keyboard(message.from_user.id), parse_mode="HTML")
 
 
 @dp.message(F.text.in_({"⚠️ Ближайшие слёты", "Ближайшие слёты"}))
 async def nearest(message: types.Message):
-    if not has_access(message.from_user.id):
-        return
+    if not has_access(message.from_user.id): return
     now = (datetime.now(timezone.utc) + timedelta(hours=3)).replace(tzinfo=None)
     limit = now + timedelta(hours=3)
-    rows = fetch_rows(
-        "is_frozen = 0 AND exact_fall_time BETWEEN ? AND ?",
-        (now.isoformat(), limit.isoformat()),
-    )
+    rows = fetch_rows("is_frozen = 0 AND exact_fall_time BETWEEN ? AND ?", (now.isoformat(), limit.isoformat()))
     await message.answer(format_falls(rows, "⚠️ <b>Слёты в ближайшие 3 часа</b>"), parse_mode="HTML")
 
 
 @dp.message(F.text.in_({"📋 Все слёты", "Все слёты"}))
 async def all_falls(message: types.Message):
-    if not has_access(message.from_user.id):
-        return
+    if not has_access(message.from_user.id): return
     now = (datetime.now(timezone.utc) + timedelta(hours=3)).replace(tzinfo=None)
-    rows = fetch_rows(
-        "is_frozen = 0 AND exact_fall_time BETWEEN ? AND ?",
-        (now.isoformat(), (now + timedelta(hours=24)).isoformat()),
-    )
+    rows = fetch_rows("is_frozen = 0 AND exact_fall_time BETWEEN ? AND ?", (now.isoformat(), (now + timedelta(hours=24)).isoformat()))
     await message.answer(format_falls(rows, "📋 <b>Все слёты за 24 часа</b>"), parse_mode="HTML")
 
 
 @dp.message(F.text.in_({"🌐 По серверу", "По серверу"}))
 async def servers_menu(message: types.Message):
-    if not has_access(message.from_user.id):
-        return
-    buttons = []
-    for s_id, s_name in SERVERS_LIST:
-        buttons.append(InlineKeyboardButton(text=f"{s_name} [{s_id}]", callback_data=f"srv:{s_id}"))
-    keyboard_inline = [buttons[i:i+2] for i in range(0, len(buttons), 2)]
-    await message.answer("🌐 Выберите сервер из списка:", reply_markup=InlineKeyboardMarkup(inline_keyboard=keyboard_inline))
+    if not has_access(message.from_user.id): return
+    buttons = [[InlineKeyboardButton(text=f"{n} [{i}]", callback_data=f"srv:{i}") for i, n in SERVERS_LIST[j:j+2]] for j in range(0, len(SERVERS_LIST), 2)]
+    await message.answer("🌐 Выберите сервер:", reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons))
 
 
 @dp.callback_query(F.data.startswith("srv:"))
 async def server_result(callback: types.CallbackQuery):
-    if not has_access(callback.from_user.id):
-        await callback.answer("Нет доступа", show_alert=True)
-        return
-    server_id = callback.data.split(":", 1)[1]
-    server_name = server_id
-    for s_id, s_name in SERVERS_LIST:
-        if s_id == server_id:
-            server_name = s_name
-            break
-
-    rows = fetch_rows("server_id = ? AND is_frozen = 0", (server_id,))
-    text_result = format_server_compact(rows, server_id, server_name)
-    await callback.message.answer(text_result, parse_mode="HTML")
+    if not has_access(callback.from_user.id): return
+    sid = callback.data.split(":")[1]
+    sname = next((n for i, n in SERVERS_LIST if i == sid), sid)
+    rows = fetch_rows("server_id = ? AND is_frozen = 0", (sid,))
+    await callback.message.answer(format_server_compact(rows, sid, sname), parse_mode="HTML")
     await callback.answer()
 
 
 @dp.message(F.text.in_({"🏆 Сезоны", "Сезоны"}))
 async def seasons_overview(message: types.Message):
-    if not has_access(message.from_user.id):
-        return
+    if not has_access(message.from_user.id): return
     conn = db()
-    lines = ["🏆 <b>Текущие сезоны по серверам:</b>", ""]
-    for s_id, s_name in SERVERS_LIST:
-        m_row = conn.execute("SELECT season FROM manual_seasons WHERE server_id = ?", (str(s_id),)).fetchone()
-        season = "Неизвестно"
-        if m_row and m_row[0]:
-            season = m_row[0]
-        else:
-            r = conn.execute("SELECT season FROM server_objects WHERE server_id = ? ORDER BY last_updated DESC LIMIT 1", (str(s_id),)).fetchone()
-            if r and r[0]:
-                season = r[0]
-
-        icon = get_season_icon(season)
-        has_data = conn.execute("SELECT 1 FROM server_objects WHERE server_id = ? LIMIT 1", (str(s_id),)).fetchone()
-        status_box = "🟩" if has_data else "🟥"
-        lines.append(f"<code>[{s_id}] {s_name:<11}</code> {icon} {season:<14} {status_box}")
+    lines = ["🏆 <b>Текущие сезоны:</b>", ""]
+    for sid, sname in SERVERS_LIST:
+        m = conn.execute("SELECT season FROM manual_seasons WHERE server_id = ?", (sid,)).fetchone()
+        season = m[0] if m else "Неизвестно"
+        lines.append(f"<code>[{sid}] {sname:<11}</code> {get_season_icon(season)} {season}")
     conn.close()
     await message.answer("\n".join(lines), parse_mode="HTML")
 
 
 @dp.message(F.text.in_({"⚙️ Консоль разработчика", "Консоль разработчика"}))
 async def dev_console(message: types.Message):
-    if message.from_user.id not in ADMIN_IDS:
-        return
-    buttons = []
-    for s_id, s_name in SERVERS_LIST:
-        buttons.append(InlineKeyboardButton(text=f"[{s_id}] {s_name}", callback_data=f"devsrv:{s_id}"))
-    keyboard_inline = [buttons[i:i+2] for i in range(0, len(buttons), 2)]
-    await message.answer("⚙️ <b>Консоль разработчика</b>\nВыберите сервер для установки сезона:", reply_markup=InlineKeyboardMarkup(inline_keyboard=keyboard_inline), parse_mode="HTML")
+    if message.from_user.id not in ADMIN_IDS: return
+    buttons = [[InlineKeyboardButton(text=f"[{i}] {n}", callback_data=f"devsrv:{i}") for i, n in SERVERS_LIST[j:j+2]] for j in range(0, len(SERVERS_LIST), 2)]
+    await message.answer("⚙️ <b>Консоль разработчика</b>", reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), parse_mode="HTML")
 
 
 @dp.callback_query(F.data.startswith("devsrv:"))
 async def dev_select_server(callback: types.CallbackQuery):
-    if callback.from_user.id not in ADMIN_IDS:
-        return
-    server_id = callback.data.split(":", 1)[1]
-    server_name = server_id
-    for s_id, s_name in SERVERS_LIST:
-        if s_id == server_id:
-            server_name = s_name
-            break
-
-    buttons = [
-        [InlineKeyboardButton(text=season, callback_data=f"devset:{server_id}:{season}")]
-        for season in SEASONS_LIST
-    ]
-    await callback.message.answer(f"⚙️ Выберите сезон для <b>{server_name} [{server_id}]</b>:", reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), parse_mode="HTML")
+    sid = callback.data.split(":")[1]
+    buttons = [[InlineKeyboardButton(text=s, callback_data=f"devset:{sid}:{s}")] for s in SEASONS_LIST]
+    await callback.message.answer(f"⚙️ Выберите сезон для [{sid}]:", reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons))
     await callback.answer()
 
 
 @dp.callback_query(F.data.startswith("devset:"))
 async def dev_set_season(callback: types.CallbackQuery):
-    if callback.from_user.id not in ADMIN_IDS:
-        return
-    _, server_id, season = callback.data.split(":", 2)
+    _, sid, season = callback.data.split(":")
     conn = db()
-    conn.execute("INSERT OR REPLACE INTO manual_seasons (server_id, season) VALUES (?, ?)", (server_id, season))
+    conn.execute("INSERT OR REPLACE INTO manual_seasons (server_id, season) VALUES (?, ?)", (sid, season))
     conn.commit()
     conn.close()
-    await callback.message.answer(f"✅ Для сервера [{server_id}] установлен сезон: <b>{season}</b>", parse_mode="HTML")
+    await callback.message.answer(f"✅ Для [{sid}] установлен сезон: <b>{season}</b>", parse_mode="HTML")
     await callback.answer()
 
 
 @dp.message(F.text.in_({"📍 Статус", "Статус"}))
-async def status(message: types.Message):
-    if not has_access(message.from_user.id):
-        return
+async def status_msg(message: types.Message):
+    if not has_access(message.from_user.id): return
     conn = db()
-    rows = conn.execute("SELECT server_name, MAX(last_updated) FROM server_objects GROUP BY server_id").fetchall()
+    rows = conn.execute("SELECT server_name, MAX(last_updated) FROM server_objects GROUP BY server_id ORDER BY last_updated DESC").fetchall()
     conn.close()
-    rows.sort(key=lambda row: row[1] or "", reverse=True)
-    if not rows:
-        await message.answer("📍 Данных о сканировании пока нет.")
-        return
-    lines = ["📍 <b>Последние сейвы по серверам:</b>", ""]
-    for name, value in rows:
-        lines.append(f"<code>{name:<14} | {value}</code>")
+    lines = ["📍 <b>Последние сейвы:</b>", ""]
+    for name, val in rows: lines.append(f"<code>{name:<14} | {val}</code>")
     await message.answer("\n".join(lines), parse_mode="HTML")
 
 
 @dp.message(F.text.in_({"😴 Стоит проснуться", "Стоит проснуться"}))
 async def wakeup(message: types.Message):
-    if not has_access(message.from_user.id):
-        return
+    if not has_access(message.from_user.id): return
     rows = fetch_rows("is_frozen = 0")
     known = [r for r in rows if r[7] and r[7] != "Неизвестно"]
     grouped = {}
-    for row in known:
-        grouped.setdefault((row[8], row[1]), []).append(row)
+    for row in known: grouped.setdefault((row[8], row[1]), []).append(row)
     selected = []
     for values in grouped.values():
-        if any(row[3] == "Бизнес" for row in values) or sum(row[3] == "Дом" for row in values) > 5:
-            selected.extend(values)
+        if any(row[3] == "Бизнес" for row in values) or sum(row[3] == "Дом" for row in values) > 5: selected.extend(values)
     await message.answer(format_falls(selected, "😴 <b>Стоит проснуться</b>"), parse_mode="HTML")
 
 
 async def main():
     await dp.start_polling(bot)
-
 
 if __name__ == "__main__":
     asyncio.run(main())
