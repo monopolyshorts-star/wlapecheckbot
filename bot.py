@@ -4,7 +4,6 @@ import os
 import sqlite3
 import math
 from datetime import datetime, timedelta, timezone
-from html import escape
 
 from aiogram import Bot, Dispatcher, F, types
 from aiogram.filters import Command
@@ -160,7 +159,7 @@ def fetch_rows(where="", params=()):
 
 
 # -------------------------------------------------------------
-# БЛИЖАЙШИЕ / ВСЕ СЛЁТЫ (МОНОШИРИННЫЙ ФОРМАТ <pre>)
+# БЛИЖАЙШИЕ / ВСЕ СЛЁТЫ (СТАБИЛЬНАЯ РАБОЧАЯ ВЕРСИЯ)
 # -------------------------------------------------------------
 def format_falls(rows, header_title):
     known_rows = [r for r in rows if r[7] and r[7] != "Неизвестно"]
@@ -241,7 +240,7 @@ def format_falls(rows, header_title):
         body_lines.append("")
 
     quote_content = "\n".join(body_lines).strip()
-    return f"{top_header}\n<pre>{escape(quote_content)}</pre>"
+    return f"{top_header}\n\n{quote_content}"
 
 
 # -------------------------------------------------------------
@@ -256,7 +255,7 @@ def format_server_compact(rows, server_id, server_name):
     icon = get_season_icon(season)
 
     if not rows:
-        return f"🌐 <b>Сервер {server_name.upper()}[{server_id}]</b>\n<pre>└─ Сезон 🌐 \"<b>{season.upper()}</b>\" {icon}\n\n⚠️ Активных объектов не обнаружено.</pre>"
+        return f"🌐 <b>Сервер {server_name.upper()}[{server_id}]</b>\n\n└─ Сезон 🌐 \"<b>{season.upper()}</b>\" {icon}\n\n⚠️ Активных объектов не обнаружено."
 
     result = [f"└─ Сезон 🌐 \"{season.upper()}\" {icon}"]
     houses = [r for r in rows if r[3] == "Дом"]
@@ -275,7 +274,7 @@ def format_server_compact(rows, server_id, server_name):
             result.append(f"   {prefix} (PayDay: {r[6]}) - {status_name(r[7])}")
 
     quote_body = "\n".join(result)
-    return f"🌐 <b>Сервер {server_name.upper()}</b>\n<pre>{escape(quote_body)}</pre>"
+    return f"🌐 <b>Сервер {server_name.upper()}</b>\n\n{quote_body}"
 
 
 @dp.message(Command("start"))
