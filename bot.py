@@ -159,7 +159,7 @@ def fetch_rows(where="", params=()):
 
 
 # -------------------------------------------------------------
-# БЛИЖАЙШИЕ / ВСЕ СЛЁТЫ (ИДЕАЛЬНОЕ СООТВЕТСТВИЕ ОБРАЗЦУ)
+# БЛИЖАЙШИЕ / ВСЕ СЛЁТЫ (ТОЧНОЕ СХОЖДЕНИЕ С ПРИМЕРОМ)
 # -------------------------------------------------------------
 def format_falls(rows, header_title):
     known_rows = [r for r in rows if r[7] and r[7] != "Неизвестно"]
@@ -199,7 +199,7 @@ def format_falls(rows, header_title):
         except (ValueError, TypeError):
             continue
 
-        if obj_type == "Дом":
+        if obj_type == "ДоM":
             total_houses += 1
         else:
             total_biz += 1
@@ -224,9 +224,9 @@ def format_falls(rows, header_title):
         for s_idx, ((server_id, server_name, season), cat_groups) in enumerate(srv_list):
             is_last_server = (s_idx == len(srv_list) - 1)
             
-            # Ветка сервера: ├─ или └─ (одинарный тире), соединяется палочкой │ слева
-            s_branch = "└─" if is_last_server else "├─"
-            s_bar = "   " if is_last_server else "│  "
+            # Точные отступы пробелами под иконку молнии и глобуса
+            s_branch = "   └─" if is_last_server else "   ├─"
+            s_bar = "   │  " if not is_last_server else "      "
 
             icon_emoji = get_season_icon(season)
             body_lines.append(f"{s_branch}🌐 Сервер {server_name.upper()} {icon_emoji}")
@@ -239,8 +239,8 @@ def format_falls(rows, header_title):
 
             for c_idx, (kind, cat_title, items) in enumerate(categories):
                 is_last_cat = (c_idx == len(categories) - 1)
-                c_branch = "└─" if is_last_cat else "├─"
-                c_bar = "   " if is_last_cat else "│  "
+                c_branch = "      └─" if is_last_cat else "      ├─"
+                c_bar = "      │  " if not is_last_cat else "         "
 
                 body_lines.append(f"{s_bar}{c_branch}{cat_title}")
 
@@ -249,7 +249,7 @@ def format_falls(rows, header_title):
                     slot, house_id, payday, status = r[4], r[5], r[6], r[7]
                     info = status_name(status)
                     is_last_item = (i_idx == len(sorted_items) - 1)
-                    i_branch = "└─" if is_last_item else "├─"
+                    i_branch = "         └─" if is_last_item else "         ├─"
 
                     item_label = f"id {house_id}" if house_id else f"pos {slot}"
                     body_lines.append(f"{s_bar}{c_bar}{i_branch}{item_label} (PayDay: {payday}) - {info}")
@@ -453,6 +453,7 @@ async def dev_set_season(callback: types.CallbackQuery):
     conn.execute("INSERT OR REPLACE INTO manual_seasons (server_id, season) VALUES (?, ?)", (server_id, season))
     conn.commit()
     conn.close()
+    await callback.answer(f"✅ Для сервера [{server_id}] установлен сезон: <b>{season}</b>", callback.message.chat.id)
     await callback.message.answer(f"✅ Для сервера [{server_id}] установлен сезон: <b>{season}</b>", parse_mode="HTML")
     await callback.answer()
 
