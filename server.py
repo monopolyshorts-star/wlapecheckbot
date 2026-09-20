@@ -1,5 +1,6 @@
 import sqlite3
 import re
+import math
 from datetime import datetime, timedelta, timezone
 from typing import List, Optional, Any
 from fastapi import FastAPI
@@ -45,41 +46,102 @@ class RealtorPayload(BaseModel):
     scan_ts: Optional[float] = None
     items: List[RealtorItem]
 
+# Точная база правил слётов по каждому серверу согласно скриншоту:
+# house: target_insured (1 или 2), max_uninsured (2 или 3)
+# biz: target_insured (1 или 2), max_uninsured (2 или 3)
+SERVER_DROP_RULES = {
+    "01": {"h_ins": 2, "h_unins_max": 3, "b_ins": 2, "b_unins_max": 3},  # phoenix
+    "02": {"h_ins": 2, "h_unins_max": 3, "b_ins": 2, "b_unins_max": 2},  # tucson
+    "03": {"h_ins": 2, "h_unins_max": 3, "b_ins": 1, "b_unins_max": 2},  # scottdale
+    "04": {"h_ins": 2, "h_unins_max": 3, "b_ins": 1, "b_unins_max": 2},  # chandler
+    "05": {"h_ins": 2, "h_unins_max": 3, "b_ins": 2, "b_unins_max": 2},  # brainburg
+    "06": {"h_ins": 2, "h_unins_max": 3, "b_ins": 2, "b_unins_max": 3},  # saintrose
+    "07": {"h_ins": 2, "h_unins_max": 3, "b_ins": 2, "b_unins_max": 2},  # mesa
+    "08": {"h_ins": 2, "h_unins_max": 3, "b_ins": 1, "b_unins_max": 2},  # redrock
+    "09": {"h_ins": 2, "h_unins_max": 3, "b_ins": 2, "b_unins_max": 3},  # yuma
+    "10": {"h_ins": 2, "h_unins_max": 3, "b_ins": 2, "b_unins_max": 2},  # surprise
+    "11": {"h_ins": 2, "h_unins_max": 3, "b_ins": 2, "b_unins_max": 2},  # prescott
+    "12": {"h_ins": 2, "h_unins_max": 3, "b_ins": 1, "b_unins_max": 2},  # glendale
+    "13": {"h_ins": 2, "h_unins_max": 3, "b_ins": 2, "b_unins_max": 3},  # kingman
+    "14": {"h_ins": 2, "h_unins_max": 3, "b_ins": 1, "b_unins_max": 2},  # winslow
+    "15": {"h_ins": 1, "h_unins_max": 2, "b_ins": 1, "b_unins_max": 2},  # payson
+    "16": {"h_ins": 2, "h_unins_max": 3, "b_ins": 1, "b_unins_max": 2},  # gilbert
+    "17": {"h_ins": 1, "h_unins_max": 2, "b_ins": 1, "b_unins_max": 2},  # showlow
+    "18": {"h_ins": 2, "h_unins_max": 3, "b_ins": 2, "b_unins_max": 3},  # casagrande
+    "19": {"h_ins": 2, "h_unins_max": 3, "b_ins": 2, "b_unins_max": 2},  # page
+    "20": {"h_ins": 1, "h_unins_max": 2, "b_ins": 1, "b_unins_max": 2},  # suncity
+    "21": {"h_ins": 2, "h_unins_max": 3, "b_ins": 2, "b_unins_max": 2},  # queencreek
+    "22": {"h_ins": 2, "h_unins_max": 3, "b_ins": 1, "b_unins_max": 2},  # sedona
+    "23": {"h_ins": 2, "h_unins_max": 3, "b_ins": 2, "b_unins_max": 2},  # holiday
+    "24": {"h_ins": 2, "h_unins_max": 3, "b_ins": 1, "b_unins_max": 2},  # wednesday
+    "25": {"h_ins": 2, "h_unins_max": 3, "b_ins": 1, "b_unins_max": 2},  # yava
+    "26": {"h_ins": 1, "h_unins_max": 2, "b_ins": 2, "b_unins_max": 3},  # faraway
+    "27": {"h_ins": 1, "h_unins_max": 2, "b_ins": 1, "b_unins_max": 2},  # bumblebee
+    "28": {"h_ins": 2, "h_unins_max": 3, "b_ins": 2, "b_unins_max": 3},  # christmas
+    "29": {"h_ins": 2, "h_unins_max": 3, "b_ins": 2, "b_unins_max": 3},  # mirage
+    "30": {"h_ins": 1, "h_unins_max": 2, "b_ins": 2, "b_unins_max": 3},  # love
+    "31": {"h_ins": 2, "h_unins_max": 3, "b_ins": 1, "b_unins_max": 2},  # drake
+    "32": {"h_ins": 1, "h_unins_max": 2, "b_ins": 2, "b_unins_max": 2},  # space
+    "33": {"h_ins": 1, "h_unins_max": 2, "b_ins": 2, "b_unins_max": 2},  # home
+}
+
 def get_payday_slot_hour(dt: datetime) -> datetime:
-    """
-    Определяет часовой интервал PayDay:
-    17:55 - 17:59 -> относится к часу 17:00.
-    18:00 - 18:54 -> относится к 18:00.
-    """
     return dt.replace(minute=0, second=0, microsecond=0)
 
-def calculate_fall_time(obj_type: str, payday_val: int, insurance_status: str, update_time: datetime):
+def calculate_fall_time(server_id: str, obj_type: str, payday_val: int, insurance_status: str, update_time: datetime):
     try:
+        sid = str(server_id).zfill(2)
+        rules = SERVER_DROP_RULES.get(sid, {"h_ins": 2, "h_unins_max": 3, "b_ins": 2, "b_unins_max": 2})
         is_biz = (obj_type == "Бизнес")
-        
-        if is_biz:
-            if insurance_status in ["Нестрах, Без занятости", "Нестрах"]:
-                drop_per_hour = 4
-                target_pd = 4
-            elif insurance_status == "Страх, Занят":
-                drop_per_hour = 1
-                target_pd = 2
+
+        # 1. Бизнес: Нестрахованный без занятости (-4 PD/час, слетает при <= 4 PD)
+        if is_biz and insurance_status in ["Нестрах, Без занятости", "Нестрах", "Не страх, Без занят"]:
+            drop_per_hour = 4
+            target_pd = 4
+            if payday_val <= target_pd:
+                hours_left = 1
             else:
-                drop_per_hour = 2
-                target_pd = 2
+                hours_left = math.ceil((payday_val - target_pd) / drop_per_hour) + 1
+
+        # 2. Бизнес: Страхованный с занятостью (-1 PD/час)
+        elif is_biz and insurance_status in ["Страх, Занят", "Страх, есть занятость"]:
+            drop_per_hour = 1
+            target_pd = rules["b_ins"]
+            if payday_val <= target_pd:
+                hours_left = 1
+            else:
+                hours_left = (payday_val - target_pd) + 1
+
+        # 3. Бизнес: Страхованный без занятости (-2 PD/час) или Неизвестно
+        elif is_biz:
+            drop_per_hour = 2
+            target_pd = rules["b_unins_max"]
+            if payday_val <= target_pd:
+                hours_left = 1
+            else:
+                hours_left = math.ceil((payday_val - target_pd) / drop_per_hour) + 1
+
+        # 4. Дом: Нестрахованный (-2 PD/час, слёт при <= h_unins_max)
+        elif not is_biz and insurance_status in ["Нестрах", "Не страх"]:
+            drop_per_hour = 2
+            target_pd = rules["h_unins_max"]
+            if payday_val <= target_pd:
+                hours_left = 1
+            else:
+                hours_left = math.ceil((payday_val - target_pd) / drop_per_hour) + 1
+
+        # 5. Дом: Страхованный (-1 PD/час, слёт при <= h_ins) или Неизвестно (по стандарту 1 PD/час)
         else:
-            if insurance_status and "Нестрах" in str(insurance_status):
-                drop_per_hour = 2
-                target_pd = 3
+            drop_per_hour = 1
+            target_pd = rules["h_ins"]
+            if payday_val <= target_pd:
+                hours_left = 1
             else:
-                drop_per_hour = 1
-                target_pd = 2
+                hours_left = (payday_val - target_pd) + 1
 
-        paydays_left = max(0, payday_val - target_pd)
-        hours_to_add = paydays_left / drop_per_hour
-
+        # Точный расчет времени слёта ровно на следующий или N-й PayDay (:00)
         next_payday = (update_time + timedelta(hours=1)).replace(minute=0, second=0, microsecond=0)
-        fall_time = next_payday + timedelta(hours=hours_to_add)
+        fall_time = next_payday + timedelta(hours=hours_left - 1)
         return fall_time.isoformat()
     except Exception as e:
         print(f"[Calc Error] {e}", flush=True)
@@ -152,10 +214,7 @@ async def update_objects(payload: RealtorPayload):
             except Exception as e:
                 print(f"[History Load Error] {e}", flush=True)
 
-        # -------------------------------------------------------------
-        # КЛЮЧЕВОЕ ИСПРАВЛЕНИЕ:
         # Удаляем "хвосты" - старые позиции, которые слетели или отсутствуют в новом пакете
-        # -------------------------------------------------------------
         distinct_types = set(item.type for item in payload.items)
         for obj_type in distinct_types:
             type_slots = [item.slot for item in payload.items if item.type == obj_type]
@@ -235,7 +294,7 @@ async def update_objects(payload: RealtorPayload):
                 if not insurance:
                     insurance = "Неизвестно"
 
-            fall_time = calculate_fall_time(item.type, item.payday, insurance, now)
+            fall_time = calculate_fall_time(str(payload.server_id), item.type, item.payday, insurance, now)
 
             # Сохраняем актуальный объект
             cursor.execute("""
