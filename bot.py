@@ -159,7 +159,7 @@ def fetch_rows(where="", params=()):
 
 
 # -------------------------------------------------------------
-# БЛИЖАЙШИЕ / ВСЕ СЛЁТЫ (СТАБИЛЬНАЯ РАБОЧАЯ ВЕРСИЯ)
+# БЛИЖАЙШИЕ / ВСЕ СЛЁТЫ
 # -------------------------------------------------------------
 def format_falls(rows, header_title):
     known_rows = [r for r in rows if r[7] and r[7] != "Неизвестно"]
@@ -211,6 +211,7 @@ def format_falls(rows, header_title):
         for s_idx, ((server_id, server_name, season), cat_groups) in enumerate(srv_list):
             is_last_server = (s_idx == len(srv_list) - 1)
             
+            # Уровень 1: Сервер
             s_branch = "       └─" if is_last_server else "       ├─"
             s_bar = "       │  " if several_servers and not is_last_server else "          "
 
@@ -224,6 +225,7 @@ def format_falls(rows, header_title):
             for c_idx, (cat_title, items) in enumerate(categories):
                 is_last_cat = (c_idx == len(categories) - 1)
                 
+                # Уровень 2: Категория
                 c_branch = "               └─" if is_last_cat else "               ├─"
                 body_lines.append(f"{c_branch}{cat_title}")
 
@@ -233,6 +235,7 @@ def format_falls(rows, header_title):
                     info = status_name(status)
                     is_last_item = (i_idx == len(sorted_items) - 1)
                     
+                    # Уровень 3: Имущество (через чистые символы псевдографики ├─ и └─)
                     i_branch = "                       └─" if is_last_item else "                       ├─"
                     label = f"id {house_id}" if house_id else f"pos {slot}"
                     body_lines.append(f"{i_branch}{label} (PayDay: {payday}) - {info}")
@@ -240,7 +243,7 @@ def format_falls(rows, header_title):
         body_lines.append("")
 
     quote_content = "\n".join(body_lines).strip()
-    return f"{top_header}\n\n{quote_content}"
+    return f"{top_header}\n<blockquote>{quote_content}</blockquote>"
 
 
 # -------------------------------------------------------------
@@ -255,7 +258,7 @@ def format_server_compact(rows, server_id, server_name):
     icon = get_season_icon(season)
 
     if not rows:
-        return f"🌐 <b>Сервер {server_name.upper()}[{server_id}]</b>\n\n└─ Сезон 🌐 \"<b>{season.upper()}</b>\" {icon}\n\n⚠️ Активных объектов не обнаружено."
+        return f"🌐 <b>Сервер {server_name.upper()}[{server_id}]</b>\n<blockquote>└─ Сезон 🌐 \"<b>{season.upper()}</b>\" {icon}\n\n⚠️ Активных объектов не обнаружено.</blockquote>"
 
     result = [f"└─ Сезон 🌐 \"{season.upper()}\" {icon}"]
     houses = [r for r in rows if r[3] == "Дом"]
@@ -273,8 +276,7 @@ def format_server_compact(rows, server_id, server_name):
             prefix = f"id {r[5]}" if r[5] else f"pos {r[4]}"
             result.append(f"   {prefix} (PayDay: {r[6]}) - {status_name(r[7])}")
 
-    quote_body = "\n".join(result)
-    return f"🌐 <b>Сервер {server_name.upper()}</b>\n\n{quote_body}"
+    return f"🌐 <b>Сервер {server_name.upper()}</b>\n<blockquote>" + "\n".join(result) + "</blockquote>"
 
 
 @dp.message(Command("start"))
