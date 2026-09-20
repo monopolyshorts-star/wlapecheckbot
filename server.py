@@ -46,43 +46,45 @@ class RealtorPayload(BaseModel):
     scan_ts: Optional[float] = None
     items: List[RealtorItem]
 
-# Точная база правил слётов по каждому серверу согласно скриншоту:
-# house: target_insured (1 или 2), max_uninsured (2 или 3)
-# biz: target_insured (1 или 2), max_uninsured (2 или 3)
-SERVER_DROP_RULES = {
-    "01": {"h_ins": 2, "h_unins_max": 3, "b_ins": 2, "b_unins_max": 3},  # phoenix
-    "02": {"h_ins": 2, "h_unins_max": 3, "b_ins": 2, "b_unins_max": 2},  # tucson
-    "03": {"h_ins": 2, "h_unins_max": 3, "b_ins": 1, "b_unins_max": 2},  # scottdale
-    "04": {"h_ins": 2, "h_unins_max": 3, "b_ins": 1, "b_unins_max": 2},  # chandler
-    "05": {"h_ins": 2, "h_unins_max": 3, "b_ins": 2, "b_unins_max": 2},  # brainburg
-    "06": {"h_ins": 2, "h_unins_max": 3, "b_ins": 2, "b_unins_max": 3},  # saintrose
-    "07": {"h_ins": 2, "h_unins_max": 3, "b_ins": 2, "b_unins_max": 2},  # mesa
-    "08": {"h_ins": 2, "h_unins_max": 3, "b_ins": 1, "b_unins_max": 2},  # redrock
-    "09": {"h_ins": 2, "h_unins_max": 3, "b_ins": 2, "b_unins_max": 3},  # yuma
-    "10": {"h_ins": 2, "h_unins_max": 3, "b_ins": 2, "b_unins_max": 2},  # surprise
-    "11": {"h_ins": 2, "h_unins_max": 3, "b_ins": 2, "b_unins_max": 2},  # prescott
-    "12": {"h_ins": 2, "h_unins_max": 3, "b_ins": 1, "b_unins_max": 2},  # glendale
-    "13": {"h_ins": 2, "h_unins_max": 3, "b_ins": 2, "b_unins_max": 3},  # kingman
-    "14": {"h_ins": 2, "h_unins_max": 3, "b_ins": 1, "b_unins_max": 2},  # winslow
-    "15": {"h_ins": 1, "h_unins_max": 2, "b_ins": 1, "b_unins_max": 2},  # payson
-    "16": {"h_ins": 2, "h_unins_max": 3, "b_ins": 1, "b_unins_max": 2},  # gilbert
-    "17": {"h_ins": 1, "h_unins_max": 2, "b_ins": 1, "b_unins_max": 2},  # showlow
-    "18": {"h_ins": 2, "h_unins_max": 3, "b_ins": 2, "b_unins_max": 3},  # casagrande
-    "19": {"h_ins": 2, "h_unins_max": 3, "b_ins": 2, "b_unins_max": 2},  # page
-    "20": {"h_ins": 1, "h_unins_max": 2, "b_ins": 1, "b_unins_max": 2},  # suncity
-    "21": {"h_ins": 2, "h_unins_max": 3, "b_ins": 2, "b_unins_max": 2},  # queencreek
-    "22": {"h_ins": 2, "h_unins_max": 3, "b_ins": 1, "b_unins_max": 2},  # sedona
-    "23": {"h_ins": 2, "h_unins_max": 3, "b_ins": 2, "b_unins_max": 2},  # holiday
-    "24": {"h_ins": 2, "h_unins_max": 3, "b_ins": 1, "b_unins_max": 2},  # wednesday
-    "25": {"h_ins": 2, "h_unins_max": 3, "b_ins": 1, "b_unins_max": 2},  # yava
-    "26": {"h_ins": 1, "h_unins_max": 2, "b_ins": 2, "b_unins_max": 3},  # faraway
-    "27": {"h_ins": 1, "h_unins_max": 2, "b_ins": 1, "b_unins_max": 2},  # bumblebee
-    "28": {"h_ins": 2, "h_unins_max": 3, "b_ins": 2, "b_unins_max": 3},  # christmas
-    "29": {"h_ins": 2, "h_unins_max": 3, "b_ins": 2, "b_unins_max": 3},  # mirage
-    "30": {"h_ins": 1, "h_unins_max": 2, "b_ins": 2, "b_unins_max": 3},  # love
-    "31": {"h_ins": 2, "h_unins_max": 3, "b_ins": 1, "b_unins_max": 2},  # drake
-    "32": {"h_ins": 1, "h_unins_max": 2, "b_ins": 2, "b_unins_max": 2},  # space
-    "33": {"h_ins": 1, "h_unins_max": 2, "b_ins": 2, "b_unins_max": 2},  # home
+# ТАБЛИЦА ПРАВИЛ СЛЁТОВ (Thresholds)
+# h_ins: за сколько слетает застрахованный дом
+# h_un: за сколько слетает нестрахованный дом (берем макс. значение из 2/3 или 1/2)
+# b_ins: за сколько слетает застрахованный бизнес
+# b_un: за сколько слетает нестрахованный бизнес
+SERVER_RULES = {
+    "01": {"h_ins": 2, "h_un": 3, "b_ins": 2, "b_un": 3}, # phoenix
+    "02": {"h_ins": 2, "h_un": 3, "b_ins": 2, "b_un": 2}, # tucson
+    "03": {"h_ins": 2, "h_un": 3, "b_ins": 1, "b_un": 2}, # scottdale
+    "04": {"h_ins": 2, "h_un": 3, "b_ins": 1, "b_un": 2}, # chandler
+    "05": {"h_ins": 2, "h_un": 3, "b_ins": 2, "b_un": 2}, # brainburg
+    "06": {"h_ins": 2, "h_un": 3, "b_ins": 2, "b_un": 3}, # saintrose
+    "07": {"h_ins": 2, "h_un": 3, "b_ins": 2, "b_un": 2}, # mesa
+    "08": {"h_ins": 2, "h_un": 3, "b_ins": 1, "b_un": 2}, # redrock
+    "09": {"h_ins": 2, "h_un": 3, "b_ins": 2, "b_un": 3}, # yuma
+    "10": {"h_ins": 2, "h_un": 3, "b_ins": 2, "b_un": 2}, # surprise
+    "11": {"h_ins": 2, "h_un": 3, "b_ins": 2, "b_un": 2}, # prescott
+    "12": {"h_ins": 2, "h_un": 3, "b_ins": 1, "b_un": 2}, # glendale
+    "13": {"h_ins": 2, "h_un": 3, "b_ins": 2, "b_un": 3}, # kingman
+    "14": {"h_ins": 2, "h_un": 3, "b_ins": 1, "b_un": 2}, # winslow
+    "15": {"h_ins": 1, "h_un": 2, "b_ins": 1, "b_un": 2}, # payson
+    "16": {"h_ins": 2, "h_un": 3, "b_ins": 1, "b_un": 2}, # gilbert
+    "17": {"h_ins": 1, "h_un": 2, "b_ins": 1, "b_un": 2}, # showlow
+    "18": {"h_ins": 2, "h_un": 3, "b_ins": 2, "b_un": 3}, # casagrande
+    "19": {"h_ins": 2, "h_un": 3, "b_ins": 2, "b_un": 2}, # page
+    "20": {"h_ins": 1, "h_un": 2, "b_ins": 1, "b_un": 2}, # suncity
+    "21": {"h_ins": 2, "h_un": 3, "b_ins": 2, "b_un": 2}, # queencreek
+    "22": {"h_ins": 2, "h_un": 3, "b_ins": 1, "b_un": 2}, # sedona
+    "23": {"h_ins": 2, "h_un": 3, "b_ins": 2, "b_un": 2}, # holiday
+    "24": {"h_ins": 2, "h_un": 3, "b_ins": 1, "b_un": 2}, # wednesday
+    "25": {"h_ins": 2, "h_un": 3, "b_ins": 1, "b_un": 2}, # yava
+    "26": {"h_ins": 1, "h_un": 2, "b_ins": 2, "b_un": 3}, # faraway
+    "27": {"h_ins": 1, "h_un": 2, "b_ins": 1, "b_un": 2}, # bumblebee
+    "28": {"h_ins": 2, "h_un": 3, "b_ins": 2, "b_un": 3}, # christmas
+    "29": {"h_ins": 2, "h_un": 3, "b_ins": 2, "b_un": 3}, # mirage
+    "30": {"h_ins": 1, "h_un": 2, "b_ins": 2, "b_un": 3}, # love
+    "31": {"h_ins": 2, "h_un": 3, "b_ins": 1, "b_un": 2}, # drake
+    "32": {"h_ins": 1, "h_un": 2, "b_ins": 2, "b_un": 2}, # space
+    "33": {"h_ins": 1, "h_un": 2, "b_ins": 2, "b_un": 2}, # home
 }
 
 def get_payday_slot_hour(dt: datetime) -> datetime:
@@ -91,57 +93,45 @@ def get_payday_slot_hour(dt: datetime) -> datetime:
 def calculate_fall_time(server_id: str, obj_type: str, payday_val: int, insurance_status: str, update_time: datetime):
     try:
         sid = str(server_id).zfill(2)
-        rules = SERVER_DROP_RULES.get(sid, {"h_ins": 2, "h_unins_max": 3, "b_ins": 2, "b_unins_max": 2})
+        # Если сервера нет в списке, используем дефолт (Phoenix)
+        rules = SERVER_RULES.get(sid, SERVER_RULES["01"])
         is_biz = (obj_type == "Бизнес")
 
-        # 1. Бизнес: Нестрахованный без занятости (-4 PD/час, слетает при <= 4 PD)
-        if is_biz and insurance_status in ["Нестрах, Без занятости", "Нестрах", "Не страх, Без занят"]:
-            drop_per_hour = 4
-            target_pd = 4
-            if payday_val <= target_pd:
-                hours_left = 1
+        # 1. Определяем скорость (drop_per_hour) и порог (target_pd)
+        if is_biz:
+            # Бизнес нестрахованный (-4 PD)
+            if insurance_status in ["Нестрах, Без занятости", "Нестрах", "Не страх, Без занят"]:
+                drop_per_hour = 4
+                target_pd = rules["b_un"]
+            # Бизнес страхованный с занятостью (-1 PD)
+            elif insurance_status in ["Страх, Занят", "Страх, есть занятость"]:
+                drop_per_hour = 1
+                target_pd = rules["b_ins"]
+            # Бизнес страхованный без занятости (-2 PD) или Неизвестно
             else:
-                hours_left = math.ceil((payday_val - target_pd) / drop_per_hour) + 1
-
-        # 2. Бизнес: Страхованный с занятостью (-1 PD/час)
-        elif is_biz and insurance_status in ["Страх, Занят", "Страх, есть занятость"]:
-            drop_per_hour = 1
-            target_pd = rules["b_ins"]
-            if payday_val <= target_pd:
-                hours_left = 1
-            else:
-                hours_left = (payday_val - target_pd) + 1
-
-        # 3. Бизнес: Страхованный без занятости (-2 PD/час) или Неизвестно
-        elif is_biz:
-            drop_per_hour = 2
-            target_pd = rules["b_unins_max"]
-            if payday_val <= target_pd:
-                hours_left = 1
-            else:
-                hours_left = math.ceil((payday_val - target_pd) / drop_per_hour) + 1
-
-        # 4. Дом: Нестрахованный (-2 PD/час, слёт при <= h_unins_max)
-        elif not is_biz and insurance_status in ["Нестрах", "Не страх"]:
-            drop_per_hour = 2
-            target_pd = rules["h_unins_max"]
-            if payday_val <= target_pd:
-                hours_left = 1
-            else:
-                hours_left = math.ceil((payday_val - target_pd) / drop_per_hour) + 1
-
-        # 5. Дом: Страхованный (-1 PD/час, слёт при <= h_ins) или Неизвестно (по стандарту 1 PD/час)
+                drop_per_hour = 2
+                target_pd = rules["b_un"]
         else:
-            drop_per_hour = 1
-            target_pd = rules["h_ins"]
-            if payday_val <= target_pd:
-                hours_left = 1
+            # Дом нестрахованный (-2 PD)
+            if insurance_status in ["Нестрах", "Не страх"]:
+                drop_per_hour = 2
+                target_pd = rules["h_un"]
+            # Дом страхованный (-1 PD) или Неизвестно
             else:
-                hours_left = (payday_val - target_pd) + 1
+                drop_per_hour = 1
+                target_pd = rules["h_ins"]
 
-        # Точный расчет времени слёта ровно на следующий или N-й PayDay (:00)
+        # 2. РАСЧЕТ ЧАСОВ (Логика: слетает ПОСЛЕ достижения порога)
+        # Если текущий PD уже равен или меньше порога -> слетит в ближайший PD
+        if payday_val <= target_pd:
+            hours_to_wait = 1
+        else:
+            # Считаем, сколько часов нужно, чтобы ДОЙТИ до порога, и прибавляем 1 час на сам слёт
+            hours_to_wait = math.ceil((payday_val - target_pd) / drop_per_hour) + 1
+
+        # 3. ФОРМИРУЕМ ВРЕМЯ (:00)
         next_payday = (update_time + timedelta(hours=1)).replace(minute=0, second=0, microsecond=0)
-        fall_time = next_payday + timedelta(hours=hours_left - 1)
+        fall_time = next_payday + timedelta(hours=hours_to_wait - 1)
         return fall_time.isoformat()
     except Exception as e:
         print(f"[Calc Error] {e}", flush=True)
@@ -150,7 +140,7 @@ def calculate_fall_time(server_id: str, obj_type: str, payday_val: int, insuranc
 @app.post("/api/update")
 async def update_objects(payload: RealtorPayload):
     try:
-        print(f"[API] Принят пакет: сервер {payload.server_name} [{payload.server_id}], объектов: {len(payload.items)}", flush=True)
+        print(f"[API] Пакет от {payload.server_name} [{payload.server_id}], объектов: {len(payload.items)}", flush=True)
         conn = sqlite3.connect(DB_NAME)
         cursor = conn.cursor()
         
@@ -165,12 +155,7 @@ async def update_objects(payload: RealtorPayload):
         m_season = cursor.fetchone()
         active_season = m_season[0] if m_season and m_season[0] else payload.season
 
-        # Получаем данные последнего предыдущего скана для этого сервера
-        cursor.execute("""
-            SELECT recorded_at FROM scan_history 
-            WHERE server_id = ?
-            ORDER BY id DESC LIMIT 1
-        """, (str(payload.server_id),))
+        cursor.execute("SELECT recorded_at FROM scan_history WHERE server_id = ? ORDER BY id DESC LIMIT 1", (str(payload.server_id),))
         last_global_row = cursor.fetchone()
 
         last_scan_items = {}
@@ -181,16 +166,8 @@ async def update_objects(payload: RealtorPayload):
             try:
                 last_time_str = last_global_row[0]
                 last_dt = datetime.strptime(last_time_str, "%d.%m.%Y %H:%M:%S")
-                
-                current_slot = get_payday_slot_hour(now)
-                prev_slot = get_payday_slot_hour(last_dt)
-                
-                diff_hours_calc = int(round((current_slot - prev_slot).total_seconds() / 3600.0))
-                
-                if 1 <= diff_hours_calc <= 24:
-                    hours_diff = diff_hours_calc
-                else:
-                    hours_diff = 0
+                diff_hours_calc = int(round((get_payday_slot_hour(now) - get_payday_slot_hour(last_dt)).total_seconds() / 3600.0))
+                hours_diff = diff_hours_calc if 1 <= diff_hours_calc <= 24 else 0
 
                 cursor.execute("""
                     SELECT sh.slot, sh.obj_type, sh.payday, so.house_id, so.insurance_status
@@ -199,31 +176,19 @@ async def update_objects(payload: RealtorPayload):
                     WHERE sh.server_id = ? AND sh.recorded_at = ?
                 """, (str(payload.server_id), last_time_str))
                 for prev_slot_num, prev_type, prev_pd, prev_hid, prev_ins in cursor.fetchall():
-                    item_dict = {
-                        "slot": prev_slot_num,
-                        "type": prev_type,
-                        "payday": prev_pd,
-                        "house_id": prev_hid,
-                        "insurance": prev_ins or "Неизвестно"
-                    }
-                    if prev_hid:
-                        last_scan_items[(prev_type, "hid", prev_hid)] = item_dict
+                    item_dict = {"slot": prev_slot_num, "type": prev_type, "payday": prev_pd, "house_id": prev_hid, "insurance": prev_ins or "Неизвестно"}
+                    if prev_hid: last_scan_items[(prev_type, "hid", prev_hid)] = item_dict
                     last_scan_items[(prev_type, "slot", prev_slot_num)] = item_dict
                     last_scan_by_pd.setdefault((prev_type, prev_pd), []).append(item_dict)
-
             except Exception as e:
                 print(f"[History Load Error] {e}", flush=True)
 
-        # Удаляем "хвосты" - старые позиции, которые слетели или отсутствуют в новом пакете
         distinct_types = set(item.type for item in payload.items)
         for obj_type in distinct_types:
             type_slots = [item.slot for item in payload.items if item.type == obj_type]
             if type_slots:
                 placeholders = ",".join("?" for _ in type_slots)
-                cursor.execute(f"""
-                    DELETE FROM server_objects 
-                    WHERE server_id = ? AND obj_type = ? AND slot NOT IN ({placeholders})
-                """, [str(payload.server_id), obj_type] + type_slots)
+                cursor.execute(f"DELETE FROM server_objects WHERE server_id = ? AND obj_type = ? AND slot NOT IN ({placeholders})", [str(payload.server_id), obj_type] + type_slots)
 
         matched_prev_items = set()
 
@@ -231,27 +196,17 @@ async def update_objects(payload: RealtorPayload):
             insurance = item.state
             matched_prev = None
 
-            # 1. Точное сопоставление по house_id (скорострелы)
             if item.house_id and (item.type, "hid", item.house_id) in last_scan_items:
                 matched_prev = last_scan_items[(item.type, "hid", item.house_id)]
-
-            # 2. Тот же час (повторный скан без смены PayDay)
             elif hours_diff == 0 and (item.type, "slot", item.slot) in last_scan_items:
                 prev = last_scan_items[(item.type, "slot", item.slot)]
-                if prev["payday"] == item.payday:
-                    matched_prev = prev
-
-            # 3. Следующий PayDay (прошел 1 или несколько часов)
+                if prev["payday"] == item.payday: matched_prev = prev
             elif hours_diff > 0:
-                # А) По тому же слоту
                 candidate = last_scan_items.get((item.type, "slot", item.slot))
                 if candidate and id(candidate) not in matched_prev_items:
                     drop = candidate["payday"] - item.payday
                     expected_rates = [1, 2] if item.type == "Дом" else [1, 2, 4]
-                    if any(drop == rate * hours_diff for rate in expected_rates):
-                        matched_prev = candidate
-
-                # Б) Со смещением позиций
+                    if any(drop == rate * hours_diff for rate in expected_rates): matched_prev = candidate
                 if not matched_prev:
                     expected_rates = [1, 2] if item.type == "Дом" else [1, 2, 4]
                     for rate in expected_rates:
@@ -261,42 +216,29 @@ async def update_objects(payload: RealtorPayload):
                             if id(cand) not in matched_prev_items:
                                 matched_prev = cand
                                 break
-                        if matched_prev:
-                            break
+                        if matched_prev: break
 
-            # Определение статуса страховки
             if matched_prev:
                 matched_prev_items.add(id(matched_prev))
-                
                 if matched_prev.get("insurance") and matched_prev["insurance"] != "Неизвестно":
                     insurance = matched_prev["insurance"]
                 elif hours_diff > 0:
                     pd_diff = matched_prev["payday"] - item.payday
                     drop_speed = pd_diff / hours_diff
-                    
                     if item.type == "Бизнес":
-                        if drop_speed >= 3.0:
-                            insurance = "Нестрах, Без занятости"
-                        elif drop_speed >= 1.5:
-                            insurance = "Страх, Незанят"
-                        elif drop_speed >= 0.8:
-                            insurance = "Страх, Занят"
-                        else:
-                            insurance = "Неизвестно"
+                        if drop_speed >= 3.0: insurance = "Нестрах, Без занятости"
+                        elif drop_speed >= 1.5: insurance = "Страх, Незанят"
+                        elif drop_speed >= 0.8: insurance = "Страх, Занят"
+                        else: insurance = "Неизвестно"
                     else:
-                        if drop_speed >= 1.5:
-                            insurance = "Нестрах"
-                        elif drop_speed >= 0.8:
-                            insurance = "Страх"
-                        else:
-                            insurance = "Неизвестно"
+                        if drop_speed >= 1.5: insurance = "Нестрах"
+                        elif drop_speed >= 0.8: insurance = "Страх"
+                        else: insurance = "Неизвестно"
             else:
-                if not insurance:
-                    insurance = "Неизвестно"
+                if not insurance: insurance = "Неизвестно"
 
             fall_time = calculate_fall_time(str(payload.server_id), item.type, item.payday, insurance, now)
 
-            # Сохраняем актуальный объект
             cursor.execute("""
                 INSERT INTO server_objects (
                     server_id, server_name, season, obj_type, slot, house_id, 
@@ -310,24 +252,14 @@ async def update_objects(payload: RealtorPayload):
                     insurance_status = excluded.insurance_status,
                     season = excluded.season,
                     exact_fall_time = excluded.exact_fall_time,
-                    last_updated = excluded.last_updated,
-                    is_frozen = excluded.is_frozen,
-                    is_estate = excluded.is_estate
-            """, (
-                str(payload.server_id), payload.server_name, active_season, 
-                item.type, item.slot, item.house_id, item.payday, insurance, 
-                fall_time, now_str
-            ))
+                    last_updated = excluded.last_updated
+            """, (str(payload.server_id), payload.server_name, active_season, item.type, item.slot, item.house_id, item.payday, insurance, fall_time, now_str))
 
-            # Записываем в историю
-            cursor.execute("""
-                INSERT INTO scan_history (server_id, slot, obj_type, payday, recorded_at)
-                VALUES (?, ?, ?, ?, ?)
-            """, (str(payload.server_id), item.slot, item.type, item.payday, now_str))
+            cursor.execute("INSERT INTO scan_history (server_id, slot, obj_type, payday, recorded_at) VALUES (?, ?, ?, ?, ?)", (str(payload.server_id), item.slot, item.type, item.payday, now_str))
 
         conn.commit()
         conn.close()
-        print(f"[API УСПЕХ] Сервер {payload.server_name} обновлен ({len(payload.items)} об.)", flush=True)
+        print(f"[API УСПЕХ] Сервер {payload.server_name} обновлен!", flush=True)
         return {"status": "success", "count": len(payload.items)}
     except Exception as e:
         print(f"[API КРИТИЧЕСКАЯ ОШИБКА] {e}", flush=True)
