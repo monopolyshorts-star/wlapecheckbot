@@ -159,7 +159,7 @@ def fetch_rows(where="", params=()):
 
 
 # -------------------------------------------------------------
-# БЛИЖАЙШИЕ / ВСЕ СЛЁТЫ (ФИНАЛЬНЫЕ ТОЧНЫЕ ПРАВКИ)
+# БЛИЖАЙШИЕ / ВСЕ СЛЁТЫ (ИДЕАЛЬНЫЙ ВИЗУАЛ)
 # -------------------------------------------------------------
 def format_falls(rows, header_title):
     known_rows = [r for r in rows if r[7] and r[7] != "Неизвестно"]
@@ -226,12 +226,12 @@ def format_falls(rows, header_title):
         for s_idx, ((server_id, server_name, season), cat_groups) in enumerate(srv_list):
             is_last_server = (s_idx == len(srv_list) - 1)
             
-            # Сервер остается на месте (7 пробелов)
-            server_branch = "       └─" if is_last_server else "       ├─"
-            server_bar   = "       │  " if several_servers and not is_last_server else "          "
+            # Сервер (3 пробела от края)
+            s_branch = "   └─" if is_last_server else "   ├─"
+            s_bar   = "   │  " if several_servers and not is_last_server else "      "
 
             icon_emoji = get_season_icon(season)
-            body_lines.append(f"{server_branch}🌐 Сервер {server_name.upper()} {icon_emoji}")
+            body_lines.append(f"{s_branch}🌐 Сервер {server_name.upper()} {icon_emoji}")
 
             categories = []
             if cat_groups["Дом"]:
@@ -242,11 +242,11 @@ def format_falls(rows, header_title):
             for c_idx, (kind, cat_title, items) in enumerate(categories):
                 is_last_cat = (c_idx == len(categories) - 1)
                 
-                # Дома/Бизнесы сдвинуты на 4 пробела влево (было 9, стало 5)
-                cat_branch = "     └─" if is_last_cat else "     ├─"
-                cat_bar   = "     │  " if not is_last_cat else "        "
+                # Категория (6 пробелов от края)
+                c_branch = "      └─" if is_last_cat else "      ├─"
+                c_bar   = "      │  " if not is_last_cat else "         "
 
-                body_lines.append(f"{server_bar}{cat_branch}{cat_title}")
+                body_lines.append(f"{s_bar}{c_branch}{cat_title}")
 
                 sorted_items = sorted(items, key=lambda x: x[4])
                 for i_idx, r in enumerate(sorted_items):
@@ -254,11 +254,11 @@ def format_falls(rows, header_title):
                     info = status_name(status)
                     is_last_item = (i_idx == len(sorted_items) - 1)
                     
-                    # Позиции (pos) сдвинуты еще на 7 влево (было 8, стало 1)
-                    item_branch = " └─" if is_last_item else " ├─"
+                    # Позиции (9 пробелов от края)
+                    i_branch = "         └─" if is_last_item else "         ├─"
 
                     item_label = f"id {house_id}" if house_id else f"pos {slot}"
-                    body_lines.append(f"{server_bar}{cat_bar}{item_branch}{item_label} (PayDay: {payday}) - {info}")
+                    body_lines.append(f"{s_bar}{c_bar}{i_branch}{item_label} (PayDay: {payday}) - {info}")
 
         body_lines.append("")
 
@@ -426,7 +426,7 @@ async def dev_console(message: types.Message):
         return
     buttons = []
     for s_id, s_name in SERVERS_LIST:
-        buttons.append(InlineKeyboardButton(text=f"[{s_id}] {s_name}", callback_data=devsrv:{s_id}))
+        buttons.append(InlineKeyboardButton(text=f"[{s_id}] {s_name}", callback_data=f"devsrv:{s_id}"))
     keyboard_inline = [buttons[i:i+2] for i in range(0, len(buttons), 2)]
     await message.answer("⚙️ <b>Консоль разработчика</b>\nВыберите сервер для установки сезона:", reply_markup=InlineKeyboardMarkup(inline_keyboard=keyboard_inline), parse_mode="HTML")
 
@@ -459,7 +459,7 @@ async def dev_set_season(callback: types.CallbackQuery):
     conn.execute("INSERT OR REPLACE INTO manual_seasons (server_id, season) VALUES (?, ?)", (server_id, season))
     conn.commit()
     conn.close()
-    await message.answer(f"✅ Для сервера [{server_id}] установлен сезон: <b>{season}</b>", parse_mode="HTML")
+    await callback.message.answer(f"✅ Для сервера [{server_id}] установлен сезон: <b>{season}</b>", parse_mode="HTML")
     await callback.answer()
 
 
