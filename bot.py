@@ -159,7 +159,7 @@ def fetch_rows(where="", params=()):
 
 
 # -------------------------------------------------------------
-# БЛИЖАЙШИЕ / ВСЕ СЛЁТЫ (ИДЕАЛЬНАЯ КОМПАКТНАЯ ЛЕСТНИЦА)
+# БЛИЖАЙШИЕ / ВСЕ СЛЁТЫ (ФИНАЛЬНАЯ ТОЧНАЯ ПОДГОНКА ОТСТУПОВ)
 # -------------------------------------------------------------
 def format_falls(rows, header_title):
     known_rows = [r for r in rows if r[7] and r[7] != "Неизвестно"]
@@ -221,12 +221,14 @@ def format_falls(rows, header_title):
         body_lines.append(f"└─⚡️ Слёты в {hour}:")
         srv_list = sorted(grouped[hour].items(), key=lambda x: x[0][1])
 
+        several_servers = len(srv_list) > 1
+
         for s_idx, ((server_id, server_name, season), cat_groups) in enumerate(srv_list):
             is_last_server = (s_idx == len(srv_list) - 1)
             
-            # Строго по вашему примеру:
-            server_branch = "   └─" if is_last_server else "   ├─"
-            server_bar   = "   │  " if not is_last_server else "      "
+            # Сервер: сдвинут на 4 пробела вправо (было 3, стало 7)
+            server_branch = "       └─" if is_last_server else "       ├─"
+            server_bar   = "       │  " if several_servers and not is_last_server else "          "
 
             icon_emoji = get_season_icon(season)
             body_lines.append(f"{server_branch}🌐 Сервер {server_name.upper()} {icon_emoji}")
@@ -240,8 +242,9 @@ def format_falls(rows, header_title):
             for c_idx, (kind, cat_title, items) in enumerate(categories):
                 is_last_cat = (c_idx == len(categories) - 1)
                 
-                cat_branch = "      └─" if is_last_cat else "      ├─"
-                cat_bar   = "      │  " if not is_last_cat else "         "
+                # Дома/Бизнесы: сдвинуты еще на 3 пробела вправо (было 6, стало 9)
+                cat_branch = "         └─" if is_last_cat else "         ├─"
+                cat_bar   = "         │  " if not is_last_cat else "            "
 
                 body_lines.append(f"{server_bar}{cat_branch}{cat_title}")
 
@@ -251,7 +254,8 @@ def format_falls(rows, header_title):
                     info = status_name(status)
                     is_last_item = (i_idx == len(sorted_items) - 1)
                     
-                    item_branch = "         └─" if is_last_item else "         ├─"
+                    # Позиции (pos/id): сдвинуты на 4 влево (было 12, стало 8)
+                    item_branch = "        └─" if is_last_item else "        ├─"
 
                     item_label = f"id {house_id}" if house_id else f"pos {slot}"
                     body_lines.append(f"{server_bar}{cat_bar}{item_branch}{item_label} (PayDay: {payday}) - {info}")
