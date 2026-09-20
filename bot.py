@@ -159,7 +159,7 @@ def fetch_rows(where="", params=()):
 
 
 # -------------------------------------------------------------
-# БЛИЖАЙШИЕ / ВСЕ СЛЁТЫ (ИДЕАЛЬНО КОМПАКТНЫЙ ВИЗУАЛ)
+# БЛИЖАЙШИЕ / ВСЕ СЛЁТЫ (ИДЕАЛЬНАЯ КОМПАКТНАЯ ЛЕСТНИЦА)
 # -------------------------------------------------------------
 def format_falls(rows, header_title):
     known_rows = [r for r in rows if r[7] and r[7] != "Неизвестно"]
@@ -224,9 +224,9 @@ def format_falls(rows, header_title):
         for s_idx, ((server_id, server_name, season), cat_groups) in enumerate(srv_list):
             is_last_server = (s_idx == len(srv_list) - 1)
             
-            # Фиксированные компактные отступы, чтобы линия шла прямо от иконки
-            server_branch = "       └─" if is_last_server else "       ├─"
-            server_bar   = "       │  " if not is_last_server else "          "
+            # Строго по вашему примеру:
+            server_branch = "   └─" if is_last_server else "   ├─"
+            server_bar   = "   │  " if not is_last_server else "      "
 
             icon_emoji = get_season_icon(season)
             body_lines.append(f"{server_branch}🌐 Сервер {server_name.upper()} {icon_emoji}")
@@ -240,8 +240,8 @@ def format_falls(rows, header_title):
             for c_idx, (kind, cat_title, items) in enumerate(categories):
                 is_last_cat = (c_idx == len(categories) - 1)
                 
-                cat_branch = "          └─" if is_last_cat else "          ├─"
-                cat_bar   = "          │  " if not is_last_cat else "             "
+                cat_branch = "      └─" if is_last_cat else "      ├─"
+                cat_bar   = "      │  " if not is_last_cat else "         "
 
                 body_lines.append(f"{server_bar}{cat_branch}{cat_title}")
 
@@ -251,7 +251,7 @@ def format_falls(rows, header_title):
                     info = status_name(status)
                     is_last_item = (i_idx == len(sorted_items) - 1)
                     
-                    item_branch = "             └─" if is_last_item else "             ├─"
+                    item_branch = "         └─" if is_last_item else "         ├─"
 
                     item_label = f"id {house_id}" if house_id else f"pos {slot}"
                     body_lines.append(f"{server_bar}{cat_bar}{item_branch}{item_label} (PayDay: {payday}) - {info}")
@@ -470,7 +470,6 @@ async def status(message: types.Message):
     if not rows:
         await message.answer("📍 Данных о сканировании пока нет.")
         return
-    lines = ["📍 <b>Последние сейвы по серверам:</b>", ""]
     lines = ["📍 <b>Последние сейвы по серверам:</b>", ""]
     for name, value in rows:
         lines.append(f"<code>{name:<14} | {value}</code>")
