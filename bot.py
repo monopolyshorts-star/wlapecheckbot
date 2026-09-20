@@ -159,7 +159,7 @@ def fetch_rows(where="", params=()):
 
 
 # -------------------------------------------------------------
-# СТРУКТУРА "СИНИЙ СКРИНШОТ" (ГРУППИРОВКА ПО ЧАСАМ, БЕЗ СЕРВЕРОВ НАВЕРХУ)
+# БЛИЖАЙШИЕ / ВСЕ СЛЁТЫ (ИДЕАЛЬНАЯ ДРЕВОВИДНАЯ СТРУКТУРА)
 # -------------------------------------------------------------
 def format_falls(rows, header_title):
     known_rows = [r for r in rows if r[7] and r[7] != "Неизвестно"]
@@ -207,7 +207,6 @@ def format_falls(rows, header_title):
         active_season = manual_dict.get(str(server_id)) or season or "Неизвестно"
         hour_key = dt.strftime("%H:00")
         
-        # Структура: hour -> (server_id, server_name, season) -> obj_type -> items
         hour_dict = grouped.setdefault(hour_key, {})
         srv_dict = hour_dict.setdefault((server_id, server_name, active_season), {"Дом": [], "Бизнес": []})
         srv_dict[obj_type].append(row)
@@ -252,7 +251,6 @@ def format_falls(rows, header_title):
 
                     item_label = f"id {house_id}" if house_id else f"pos {slot}"
                     
-                    # Точное время слёта дома/бизнеса (как на синем скрине)
                     time_str = ""
                     if fall_time:
                         try:
@@ -484,7 +482,7 @@ async def status(message: types.Message):
 
 
 @dp.message(F.text.in_({"😴 Стоит проснуться", "Стоит проснуться"}))
--> async def wakeup(message: types.Message):
+async def wakeup(message: types.Message):
     if not has_access(message.from_user.id):
         return
     rows = fetch_rows("is_frozen = 0")
@@ -500,7 +498,7 @@ async def status(message: types.Message):
 
 
 async def main():
-    await dp.start_polling(daemon=True)
+    await dp.start_polling(bot)
 
 
 if __name__ == "__main__":
