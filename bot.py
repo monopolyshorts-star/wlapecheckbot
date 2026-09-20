@@ -159,7 +159,7 @@ def fetch_rows(where="", params=()):
 
 
 # -------------------------------------------------------------
-# БЛИЖАЙШИЕ / ВСЕ СЛЁТЫ (СТАБИЛЬНАЯ И РОВНАЯ ВЕРСИЯ)
+# БЛИЖАЙШИЕ / ВСЕ СЛЁТЫ
 # -------------------------------------------------------------
 def format_falls(rows, header_title):
     known_rows = [r for r in rows if r[7] and r[7] != "Неизвестно"]
@@ -203,7 +203,7 @@ def format_falls(rows, header_title):
     body_lines = []
 
     for hour in sorted(grouped.keys()):
-        body_lines.append(f"└─⚡️ Слёты в {hour}:")
+        body_lines.append(f"└─⚡ Слёты в {hour}:")
         srv_list = sorted(grouped[hour].items(), key=lambda x: x[0][1])
 
         several_servers = len(srv_list) > 1
@@ -211,9 +211,9 @@ def format_falls(rows, header_title):
         for s_idx, ((server_id, server_name, season), cat_groups) in enumerate(srv_list):
             is_last_server = (s_idx == len(srv_list) - 1)
             
-            # Уровень 1: Сервер (7 пробелов)
+            # Уровень 1: Сервер
             s_branch = "       └─" if is_last_server else "       ├─"
-            s_bar   = "       │  " if several_servers and not is_last_server else "          "
+            s_bar = "       │  " if several_servers and not is_last_server else "          "
 
             icon_emoji = get_season_icon(season)
             body_lines.append(f"{s_branch}🌐 Сервер {server_name.upper()} {icon_emoji}")
@@ -225,7 +225,7 @@ def format_falls(rows, header_title):
             for c_idx, (cat_title, items) in enumerate(categories):
                 is_last_cat = (c_idx == len(categories) - 1)
                 
-                # Уровень 2: Категория (15 пробелов)
+                # Уровень 2: Категория
                 c_branch = "               └─" if is_last_cat else "               ├─"
                 body_lines.append(f"{c_branch}{cat_title}")
 
@@ -235,7 +235,7 @@ def format_falls(rows, header_title):
                     info = status_name(status)
                     is_last_item = (i_idx == len(sorted_items) - 1)
                     
-                    # Уровень 3: Имущество (23 пробела)
+                    # Уровень 3: Имущество (через чистые символы псевдографики ├─ и └─)
                     i_branch = "                       └─" if is_last_item else "                       ├─"
                     label = f"id {house_id}" if house_id else f"pos {slot}"
                     body_lines.append(f"{i_branch}{label} (PayDay: {payday}) - {info}")
@@ -387,4 +387,5 @@ async def wakeup(message: types.Message):
 async def main():
     await dp.start_polling(bot)
 
-(asyncio.run(main()) if __name__ == "__main__" else None)
+if __name__ == "__main__":
+    asyncio.run(main())
