@@ -159,7 +159,7 @@ def fetch_rows(where="", params=()):
 
 
 # -------------------------------------------------------------
-# БЛИЖАЙШИЕ / ВСЕ СЛЁТЫ (ИДЕАЛЬНЫЙ ВИЗУАЛ)
+# БЛИЖАЙШИЕ / ВСЕ СЛЁТЫ (МАТЕМАТИЧЕСКИ ТОЧНЫЕ ОТСТУПЫ)
 # -------------------------------------------------------------
 def format_falls(rows, header_title):
     known_rows = [r for r in rows if r[7] and r[7] != "Неизвестно"]
@@ -226,27 +226,30 @@ def format_falls(rows, header_title):
         for s_idx, ((server_id, server_name, season), cat_groups) in enumerate(srv_list):
             is_last_server = (s_idx == len(srv_list) - 1)
             
-            # Сервер (3 пробела от края)
-            s_branch = "   └─" if is_last_server else "   ├─"
-            s_bar   = "   │  " if several_servers and not is_last_server else "      "
+            # СТРОГО 7 ПРОБЕЛОВ ДЛЯ СЕРВЕРА
+            s_pref = "       └─" if is_last_server else "       ├─"
+            # Линия связи под сервером
+            s_bar = "       │  " if several_servers and not is_last_server else "          "
 
             icon_emoji = get_season_icon(season)
-            body_lines.append(f"{s_branch}🌐 Сервер {server_name.upper()} {icon_emoji}")
+            body_lines.append(f"{s_pref}🌐 Сервер {server_name.upper()} {icon_emoji}")
 
             categories = []
             if cat_groups["Дом"]:
-                categories.append(("Дом", "📍 Дома:", cat_groups["Дом"]))
+                categories.append(("📍 Дома:", cat_groups["Дом"]))
             if cat_groups["Бизнес"]:
-                categories.append(("Бизнес", "⭐ Бизнесы ⭐:", cat_groups["Бизнес"]))
+                categories.append(("⭐ Бизнесы ⭐:", cat_groups["Бизнес"]))
 
-            for c_idx, (kind, cat_title, items) in enumerate(categories):
+            for c_idx, (cat_title, items) in enumerate(categories):
                 is_last_cat = (c_idx == len(categories) - 1)
                 
-                # Категория (6 пробелов от края)
-                c_branch = "      └─" if is_last_cat else "      ├─"
-                c_bar   = "      │  " if not is_last_cat else "         "
+                # СТРОГО 11 ПРОБЕЛОВ ДЛЯ КАТЕГОРИИ (7+4)
+                c_pref = "   └─" if is_last_cat else "   ├─"
+                c_full_line = f"{s_bar}{c_pref}{cat_title}"
+                body_lines.append(c_full_line)
 
-                body_lines.append(f"{s_bar}{c_branch}{cat_title}")
+                # Линия связи под категорией
+                c_bar = "   │  " if not is_last_cat else "      "
 
                 sorted_items = sorted(items, key=lambda x: x[4])
                 for i_idx, r in enumerate(sorted_items):
@@ -254,11 +257,11 @@ def format_falls(rows, header_title):
                     info = status_name(status)
                     is_last_item = (i_idx == len(sorted_items) - 1)
                     
-                    # Позиции (9 пробелов от края)
-                    i_branch = "         └─" if is_last_item else "         ├─"
-
+                    # СТРОГО 14 ПРОБЕЛОВ ДЛЯ ПОЗИЦИИ (11+3)
+                    i_pref = "   └─" if is_last_item else "   ├─"
+                    
                     item_label = f"id {house_id}" if house_id else f"pos {slot}"
-                    body_lines.append(f"{s_bar}{c_bar}{i_branch}{item_label} (PayDay: {payday}) - {info}")
+                    body_lines.append(f"{s_bar}{c_bar}{i_pref}{item_label} (PayDay: {payday}) - {info}")
 
         body_lines.append("")
 
