@@ -2,6 +2,7 @@ import asyncio
 import logging
 import os
 import sqlite3
+import math
 from datetime import datetime, timedelta, timezone
 
 from aiogram import Bot, Dispatcher, F, types
@@ -158,20 +159,16 @@ def fetch_rows(where="", params=()):
 
 
 # -------------------------------------------------------------
-# БЛИЖАЙШИЕ / ВСЕ СЛЁТЫ (ОБНОВЛЕННЫЙ ВИЗУАЛ)
+# БЛИЖАЙШИЕ / ВСЕ СЛЁТЫ (ИДЕАЛЬНОЕ СООТВЕТСТВИЕ ОБРАЗЦУ)
 # -------------------------------------------------------------
 def format_falls(rows, header_title):
-    known_rows = [row for row in rows if row[7] and row[7] != "Неизвестно"]
+    known_rows = [r for r in rows if r[7] and r[7] != "Неизвестно"]
 
     if not known_rows:
         return f"{header_title}\n\n⚠️ Точно известных слётов не обнаружено."
 
     conn = db()
-    manual_dict = dict(
-        conn.execute(
-            "SELECT server_id, season FROM manual_seasons"
-        ).fetchall()
-    )
+    manual_dict = dict(conn.execute("SELECT server_id, season FROM manual_seasons").fetchall())
     conn.close()
 
     grouped = {}
@@ -198,7 +195,7 @@ def format_falls(rows, header_title):
             continue
 
         try:
-            fall_dt = datetime.fromisoformat(fall_time)
+            dt = datetime.fromisoformat(fall_time)
         except (ValueError, TypeError):
             continue
 
@@ -207,151 +204,61 @@ def format_falls(rows, header_title):
         else:
             total_biz += 1
 
-        active_season = (
-            manual_dict.get(str(server_id))
-            or season
-            or "Неизвестно"
-        )
-
-        hour = fall_dt.strftime("%H:00")
-        hour_group = grouped.setdefault(hour, {})
-
-        server_key = (
-            str(server_id),
-            server_name,
-            active_season,
-        )
-
-        server_group = hour_group.setdefault(
-            server_key,
-            {
-                "Дом": [],
-                "Бизнес": [],
-            },
-        )
-
-        server_group[obj_type].append(row)
+        active_season = manual_dict.get(str(server_id)) or season or "Неизвестно"
+        hour_key = dt.strftime("%H:00")
+        
+        hour_dict = grouped.setdefault(hour_key, {})
+        srv_dict = hour_dict.setdefault((server_id, server_name, active_season), {"Дом": [], "Бизнес": []})
+        srv_dict[obj_type].append(row)
 
     if not grouped:
-        return (
-            f"{header_title}\n\n"
-            "⚠️ Точно известных слётов с рассчитанным временем не обнаружено."
-        )
+        return f"{header_title}\n\n⚠️ Точно известных слётов с рассчитанным временем не обнаружено."
 
-    result = [
-        header_title,
-        f"🏠×{total_houses} 🏢×{total_biz}",
-        "",
-    ]
+    top_header = f"{header_title}\n🏠×{total_houses} 🏢×{total_biz}"
+    body_lines = []
 
-    for hour in sorted(grouped):
-        result.append(f"└─⚡ Слёты в {hour}:")
+    for hour in sorted(grouped.keys()):
+        body_lines.append(f"└─⚡ Слёты в {hour}:")
+        srv_list = sorted(grouped[hour].items(), key=lambda x: x[0][1])
 
-        servers = sorted(
-            grouped[hour].items(),
-            key=lambda item: item[0][1].lower(),
-        )
+        for s_idx, ((server_id, server_name, season), cat_groups) in enumerate(srv_list):
+            is_last_server = (s_idx == len(srv_list) - 1)
+            
+            # Ветка сервера: ├─ или └─ (одинарный тире), соединяется палочкой │ слева
+            s_branch = "└─" if is_last_server else "├─"
+            s_bar = "   " if is_last_server else "│  "
 
-        for server_index, ((server_id, server_name, season), groups) in enumerate(servers):
-            is_last_server = server_index == len(servers) - 1
-
-            # Ветка сервера начинается сразу под молнией.
-            server_branch = "└──" if is_last_server else "├──"
-            continuation = "      " if is_last_server else "   │  "
-
-            result.append(
-                f"   {server_branch}🌐 "
-                f"Сервер {server_name.upper()} "
-                f"{get_season_icon(season)}"
-            )
+            icon_emoji = get_season_icon(season)
+            body_lines.append(f"{s_branch}🌐 Сервер {server_name.upper()} {icon_emoji}")
 
             categories = []
+            if cat_groups["Дом"]:
+                categories.append(("Дом", "📍 Дома:", cat_groups["Дом"]))
+            if cat_groups["Бизнес"]:
+                categories.append(("Бизнес", "⭐ Бизнесы ⭐:", cat_groups["Бизнес"]))
 
-            if groups["Дом"]:
-                categories.append(
-                    ("📍 Дома:", groups["Дом"])
-                )
+            for c_idx, (kind, cat_title, items) in enumerate(categories):
+                is_last_cat = (c_idx == len(categories) - 1)
+                c_branch = "└─" if is_last_cat else "├─"
+                c_bar = "   " if is_last_cat else "│  "
 
-            if groups["Бизнес"]:
-                categories.append(
-                    ("⭐ Бизнесы ⭐:", groups["Бизнес"])
-                )
+                body_lines.append(f"{s_bar}{c_branch}{cat_title}")
 
-            for category_index, (category_title, objects) in enumerate(categories):
-                is_last_category = (
-                    category_index == len(categories) - 1
-                )
-
-                category_branch = (
-                    "└──" if is_last_category else "├──"
-                )
-
-                result.append(
-                    f"{continuation}{category_branch}"
-                    f"{category_title}"
-                )
-
-                # Эта часть продолжает именно ветку от эмодзи
-                # Дома/Бизнесы, а не создаёт новую боковую линию.
-                item_continuation = (
-                    continuation
-                    + ("   " if is_last_category else "│  ")
-                )
-
-                objects = sorted(
-                    objects,
-                    key=lambda row: row[4],
-                )
-
-                for object_index, row in enumerate(objects):
-                    (
-                        _server_name,
-                        _server_id,
-                        _season,
-                        _obj_type,
-                        slot,
-                        house_id,
-                        payday,
-                        status,
-                        _fall_time,
-                        _frozen,
-                        _is_h2,
-                        is_estate,
-                    ) = row
-
-                    is_last_object = (
-                        object_index == len(objects) - 1
-                    )
-
-                    object_branch = (
-                        "└──" if is_last_object else "├──"
-                    )
-
-                    label = (
-                        f"id {house_id}"
-                        if house_id
-                        else f"pos {slot}"
-                    )
-
+                sorted_items = sorted(items, key=lambda x: x[4])
+                for i_idx, r in enumerate(sorted_items):
+                    slot, house_id, payday, status = r[4], r[5], r[6], r[7]
                     info = status_name(status)
+                    is_last_item = (i_idx == len(sorted_items) - 1)
+                    i_branch = "└─" if is_last_item else "├─"
 
-                    if is_estate:
-                        info += " (🔒 С поместьем)"
+                    item_label = f"id {house_id}" if house_id else f"pos {slot}"
+                    body_lines.append(f"{s_bar}{c_bar}{i_branch}{item_label} (PayDay: {payday}) - {info}")
 
-                    result.append(
-                        f"{item_continuation}{object_branch}"
-                        f"{label} (PayDay: {payday}) - {info}"
-                    )
+        body_lines.append("")
 
-        result.append("")
+    quote_content = "\n".join(body_lines).strip()
+    return f"{top_header}\n<blockquote>{quote_content}</blockquote>"
 
-    quote_text = "\n".join(result[2:]).strip()
-
-    return (
-        f"{result[0]}\n"
-        f"{result[1]}\n"
-        f"<blockquote>{quote_text}</blockquote>"
-    )
 
 # -------------------------------------------------------------
 # ПО СЕРВЕРУ (ПОЛНЫЙ СПИСОК В ЦИТАТЕ)
