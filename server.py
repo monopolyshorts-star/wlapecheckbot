@@ -47,10 +47,6 @@ class RealtorPayload(BaseModel):
     items: List[RealtorItem]
 
 # ТАБЛИЦА ПРАВИЛ СЛЁТОВ (Thresholds)
-# h_ins: за сколько слетает застрахованный дом
-# h_un: за сколько слетает нестрахованный дом (берем макс. значение из 2/3 или 1/2)
-# b_ins: за сколько слетает застрахованный бизнес
-# b_un: за сколько слетает нестрахованный бизнес
 SERVER_RULES = {
     "01": {"h_ins": 2, "h_un": 3, "b_ins": 2, "b_un": 3}, # phoenix
     "02": {"h_ins": 2, "h_un": 3, "b_ins": 2, "b_un": 2}, # tucson
@@ -93,43 +89,32 @@ def get_payday_slot_hour(dt: datetime) -> datetime:
 def calculate_fall_time(server_id: str, obj_type: str, payday_val: int, insurance_status: str, update_time: datetime):
     try:
         sid = str(server_id).zfill(2)
-        # Если сервера нет в списке, используем дефолт (Phoenix)
         rules = SERVER_RULES.get(sid, SERVER_RULES["01"])
         is_biz = (obj_type == "Бизнес")
 
-        # 1. Определяем скорость (drop_per_hour) и порог (target_pd)
         if is_biz:
-            # Бизнес нестрахованный (-4 PD)
             if insurance_status in ["Нестрах, Без занятости", "Нестрах", "Не страх, Без занят"]:
                 drop_per_hour = 4
                 target_pd = rules["b_un"]
-            # Бизнес страхованный с занятостью (-1 PD)
             elif insurance_status in ["Страх, Занят", "Страх, есть занятость"]:
                 drop_per_hour = 1
                 target_pd = rules["b_ins"]
-            # Бизнес страхованный без занятости (-2 PD) или Неизвестно
             else:
                 drop_per_hour = 2
                 target_pd = rules["b_un"]
         else:
-            # Дом нестрахованный (-2 PD)
             if insurance_status in ["Нестрах", "Не страх"]:
                 drop_per_hour = 2
                 target_pd = rules["h_un"]
-            # Дом страхованный (-1 PD) или Неизвестно
             else:
                 drop_per_hour = 1
                 target_pd = rules["h_ins"]
 
-        # 2. РАСЧЕТ ЧАСОВ (Логика: слетает ПОСЛЕ достижения порога)
-        # Если текущий PD уже равен или меньше порога -> слетит в ближайший PD
         if payday_val <= target_pd:
             hours_to_wait = 1
         else:
-            # Считаем, сколько часов нужно, чтобы ДОЙТИ до порога, и прибавляем 1 час на сам слёт
             hours_to_wait = math.ceil((payday_val - target_pd) / drop_per_hour) + 1
 
-        # 3. ФОРМИРУЕМ ВРЕМЯ (:00)
         next_payday = (update_time + timedelta(hours=1)).replace(minute=0, second=0, microsecond=0)
         fall_time = next_payday + timedelta(hours=hours_to_wait - 1)
         return fall_time.isoformat()
@@ -154,6 +139,18 @@ async def update_objects(payload: RealtorPayload):
         cursor.execute("SELECT season FROM manual_seasons WHERE server_id = ?", (str(payload.server_id),))
         m_season = cursor.fetchone()
         active_season = m_season[0] if m_season and m_season[0] else payload.season
+
+        # --- ОБРАБОТКА ПУСТОЙ РИЕЛТОРКИ ---
+        if len(payload.items) == 0:
+            # Стираем все активные слёты для этого сервера
+            cursor.execute("DELETE FROM server_objects WHERE server_id = ?", (str(payload.server_id),))
+            # Сохраняем событие очистки в историю
+            cursor.execute("INSERT INTO scan_history (server_id, slot, obj_type, payday, recorded_at) VALUES (?, 0, 'Пусто', 0, ?)", (str(payload.server_id), now_str))
+            conn.commit()
+            conn.close()
+            print(f"[API УСПЕХ] Сервер {payload.server_name} полностью очищен (пустая риелторка)!", flush=True)
+            return {"status": "success", "count": 0}
+        # ----------------------------------
 
         cursor.execute("SELECT recorded_at FROM scan_history WHERE server_id = ? ORDER BY id DESC LIMIT 1", (str(payload.server_id),))
         last_global_row = cursor.fetchone()
@@ -185,10 +182,31 @@ async def update_objects(payload: RealtorPayload):
 
         distinct_types = set(item.type for item in payload.items)
         for obj_type in distinct_types:
-            type_slots = [item.slot for item in payload.items if item.type == obj_type]
-            if type_slots:
-                placeholders = ",".join("?" for _ in type_slots)
-                cursor.execute(f"DELETE FROM server_objects WHERE server_id = ? AND obj_type = ? AND slot NOT IN ({placeholders})", [str(payload.server_id), obj_type] + type_slots)
+            # --- ЛОГИКА СКЛЕЙКИ СТРАНИЦ ---
+            # Проверяем дату последнего обновления именно этого типа объектов на данном сервере
+            cursor.execute("""
+                SELECT MAX(last_updated) FROM server_objects 
+                WHERE server_id = ? AND obj_type = ?
+            """, (str(payload.server_id), obj_type))
+            last_up_row = cursor.fetchone()
+            
+            is_paged_scan = False
+            if last_up_row and last_up_row[0]:
+                try:
+                    last_up_dt = datetime.strptime(last_up_row[0], "%d.%m.%Y %H:%M:%S")
+                    # Если прошло меньше 60 секунд, это продолжение сканирования (перелистывание страниц)
+                    if (now - last_up_dt).total_seconds() < 60:
+                        is_paged_scan = True
+                except Exception as e:
+                    print(f"[Paged Check Error] {e}", flush=True)
+
+            # Если это новый сеанс (не многостраничный), удаляем старые записи
+            if not is_paged_scan:
+                type_slots = [item.slot for item in payload.items if item.type == obj_type]
+                if type_slots:
+                    placeholders = ",".join("?" for _ in type_slots)
+                    cursor.execute(f"DELETE FROM server_objects WHERE server_id = ? AND obj_type = ? AND slot NOT IN ({placeholders})", [str(payload.server_id), obj_type] + type_slots)
+            # ------------------------------
 
         matched_prev_items = set()
 
