@@ -69,6 +69,8 @@ def db():
     columns = {row[1] for row in conn.execute("PRAGMA table_info(server_objects)").fetchall()}
     if "house_id" not in columns:
         conn.execute("ALTER TABLE server_objects ADD COLUMN house_id INTEGER;")
+    if "is_frozen" not in columns:
+        conn.execute("ALTER TABLE server_objects ADD COLUMN is_frozen INTEGER DEFAULT 0;")
     conn.commit()
     return conn
 
@@ -159,13 +161,14 @@ def fetch_rows(where="", params=()):
 
 
 # -------------------------------------------------------------
-# БЛИЖАЙШИЕ / ВСЕ СЛЁТЫ
+# БЛИЖАЙШИЕ / ВСЕ СЛЁТЫ (Только активные, не замороженные)
 # -------------------------------------------------------------
 def format_falls(rows, header_title):
-    known_rows = [r for r in rows if r[7] and r[7] != "Неизвестно"]
+    # Фильтруем: исключаем замороженные объекты (is_frozen == 1)
+    known_rows = [r for r in rows if r[7] and r[7] != "Неизвестно" and r[9] != 1]
 
     if not known_rows:
-        return f"{header_title}\n\n⚠️ Точно известных слётов не обнаружено."
+        return f"{header_title}\n\n⚠️ Точно известных активных слётов не обнаружено."
 
     conn = db()
     manual_dict = dict(conn.execute("SELECT server_id, season FROM manual_seasons").fetchall())
@@ -197,7 +200,7 @@ def format_falls(rows, header_title):
         srv_dict[obj_type].append(row)
 
     if not grouped:
-        return f"{header_title}\n\n⚠️ Слётов не обнаружено."
+        return f"{header_title}\n\n⚠️ Активных слётов не обнаружено."
 
     top_header = f"{header_title}\n🏠×{total_houses} 🏢×{total_biz}"
     body_lines = []
@@ -244,7 +247,7 @@ def format_falls(rows, header_title):
 
 
 # -------------------------------------------------------------
-# ПО СЕРВЕРУ
+# ПО СЕРВЕРУ (Показывает все, включая замороженные с пометкой)
 # -------------------------------------------------------------
 def format_server_compact(rows, server_id, server_name):
     conn = db()
@@ -265,13 +268,17 @@ def format_server_compact(rows, server_id, server_name):
         result.append("└─ 🏠 Дома:")
         for r in sorted(houses, key=lambda x: x[4]):
             prefix = f"id {r[5]}" if r[5] else f"pos {r[4]}"
-            result.append(f"   {prefix} (PayDay: {r[6]}) - {status_name(r[7])}")
+            info = status_name(r[7])
+            frozen_mark = " (🔒 Заморожен)" if r[9] == 1 else ""
+            result.append(f"   {prefix} (PayDay: {r[6]}) - {info}{frozen_mark}")
 
     if businesses:
         result.append("└─ ✨ Бизнесы:")
         for r in sorted(businesses, key=lambda x: x[4]):
             prefix = f"id {r[5]}" if r[5] else f"pos {r[4]}"
-            result.append(f"   {prefix} (PayDay: {r[6]}) - {status_name(r[7])}")
+            info = status_name(r[7])
+            frozen_mark = " (🔒 Заморожен)" if r[9] == 1 else ""
+            result.append(f"   {prefix} (PayDay: {r[6]}) - {info}{frozen_mark}")
 
     return f"🌐 <b>Сервер {server_name.upper()}</b>\n<blockquote>" + "\n".join(result) + "</blockquote>"
 
@@ -301,7 +308,6 @@ async def list_users(message: types.Message):
         
     lines = ["👥 <b>Список пользователей с доступом:</b>\n"]
     for uid, expires in rows:
-        # Пытаемся сделать красивую дату
         try:
             dt = datetime.fromisoformat(expires)
             formatted = dt.strftime("%d.%m.%Y %H:%M")
@@ -401,7 +407,7 @@ async def server_result(callback: types.CallbackQuery):
     if not has_access(callback.from_user.id): return
     sid = callback.data.split(":")[1]
     sname = next((n for i, n in SERVERS_LIST if i == sid), sid)
-    rows = fetch_rows("server_id = ? AND is_frozen = 0", (sid,))
+    rows = fetch_rows("server_id = ?", (sid,))
     await callback.message.answer(format_server_compact(rows, sid, sname), parse_mode="HTML")
     await callback.answer()
 
@@ -452,14 +458,12 @@ async def status_msg(message: types.Message):
     
     server_status = []
     for s_id, s_name in SERVERS_LIST:
-        # Берём последнее обновление из истории сканирования
         row = conn.execute(
             "SELECT recorded_at FROM scan_history WHERE server_id = ? ORDER BY id DESC LIMIT 1",
             (str(s_id),)
         ).fetchone()
         val = row[0] if row else None
         
-        # Если в истории нет (например, старая база), берём из активных объектов
         if not val:
             row_obj = conn.execute(
                 "SELECT MAX(last_updated) FROM server_objects WHERE server_id = ?",
@@ -472,7 +476,6 @@ async def status_msg(message: types.Message):
             
     conn.close()
     
-    # Сортировка по времени сканирования (от новых к старым)
     def parse_dt(val_str):
         try:
             return datetime.strptime(val_str, "%d.%m.%Y %H:%M:%S")
