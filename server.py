@@ -141,7 +141,7 @@ async def update_objects(payload: RealtorPayload):
         m_season = cursor.fetchone()
         active_season = m_season[0] if m_season and m_season[0] else payload.season
 
-        # Пустая риелторка
+        # Обработка пустой риелторки
         if len(payload.items) == 0:
             cursor.execute("DELETE FROM server_objects WHERE server_id = ?", (str(payload.server_id),))
             cursor.execute("INSERT INTO scan_history (server_id, slot, obj_type, payday, recorded_at) VALUES (?, 0, 'Пусто', 0, ?)", (str(payload.server_id), now_str))
@@ -156,6 +156,7 @@ async def update_objects(payload: RealtorPayload):
         last_scan_items = {}
         last_scan_by_pd = {}
         hours_diff = 0
+        last_dt = None
 
         if last_global_row and last_global_row[0]:
             try:
@@ -248,16 +249,17 @@ async def update_objects(payload: RealtorPayload):
             else:
                 if not insurance: insurance = "Неизвестно"
 
-            # --- ЛОГИКА ЗАМОРОЗКИ (is_frozen) ---
-            # Сравниваем с предыдущим payday этого же слота/дома
+            # --- ИСПРАВЛЕННАЯ ЛОГИКА ЗАМОРОЗКИ ---
             is_frozen = 0
             prev_pd_val = matched_prev["payday"] if matched_prev else None
             
-            if prev_pd_val is not None:
+            # Замораживаем только если реально прошел хотя бы 1 час (hours_diff >= 1)
+            # и при этом payday не изменился по сравнению с прошлым часом
+            if hours_diff >= 1 and prev_pd_val is not None:
                 if item.payday == prev_pd_val:
-                    is_frozen = 1  # Заморожен (payday не уменьшился)
+                    is_frozen = 1
                 else:
-                    is_frozen = 0  # Сдвинулся (уменьшился) — активный слёт
+                    is_frozen = 0
             # ------------------------------------
 
             fall_time = calculate_fall_time(str(payload.server_id), item.type, item.payday, insurance, now)
