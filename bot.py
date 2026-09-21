@@ -211,7 +211,6 @@ def format_falls(rows, header_title):
         for s_idx, ((server_id, server_name, season), cat_groups) in enumerate(srv_list):
             is_last_server = (s_idx == len(srv_list) - 1)
             
-            # Уровень 1: Сервер
             s_branch = "       └─" if is_last_server else "       ├─"
             s_bar = "       │  " if several_servers and not is_last_server else "          "
 
@@ -225,7 +224,6 @@ def format_falls(rows, header_title):
             for c_idx, (cat_title, items) in enumerate(categories):
                 is_last_cat = (c_idx == len(categories) - 1)
                 
-                # Уровень 2: Категория
                 c_branch = "               └─" if is_last_cat else "               ├─"
                 body_lines.append(f"{c_branch}{cat_title}")
 
@@ -235,7 +233,6 @@ def format_falls(rows, header_title):
                     info = status_name(status)
                     is_last_item = (i_idx == len(sorted_items) - 1)
                     
-                    # Уровень 3: Имущество (через чистые символы псевдографики ├─ и └─)
                     i_branch = "                       └─" if is_last_item else "                       ├─"
                     label = f"id {house_id}" if house_id else f"pos {slot}"
                     body_lines.append(f"{i_branch}{label} (PayDay: {payday}) - {info}")
@@ -287,6 +284,94 @@ async def start(message: types.Message):
     await message.answer("👋 <b>Arizona Tracker</b>", reply_markup=keyboard(message.from_user.id), parse_mode="HTML")
 
 
+# -------------------------------------------------------------
+# КОМАНДЫ АДМИНИСТРАТОРА (УПРАВЛЕНИЕ КЛЮЧАМИ)
+# -------------------------------------------------------------
+@dp.message(Command("users"))
+async def list_users(message: types.Message):
+    if message.from_user.id not in ADMIN_IDS:
+        return
+    conn = db()
+    rows = conn.execute("SELECT user_id, expires_at FROM allowed_users").fetchall()
+    conn.close()
+    
+    if not rows:
+        await message.answer("👥 Список разрешенных пользователей пуст.")
+        return
+        
+    lines = ["👥 <b>Список пользователей с доступом:</b>\n"]
+    for uid, expires in rows:
+        # Пытаемся сделать красивую дату
+        try:
+            dt = datetime.fromisoformat(expires)
+            formatted = dt.strftime("%d.%m.%Y %H:%M")
+        except:
+            formatted = expires
+        lines.append(f"• <code>{uid}</code> — до <i>{formatted}</i>")
+    await message.answer("\n".join(lines), parse_mode="HTML")
+
+
+@dp.message(Command("grant"))
+async def grant_user(message: types.Message):
+    if message.from_user.id not in ADMIN_IDS:
+        return
+    args = message.text.split()
+    if len(args) < 3:
+        await message.answer("⚠️ Использование: <code>/grant [ID] [дни]</code>\nПример: <code>/grant 123456789 30</code>", parse_mode="HTML")
+        return
+        
+    try:
+        target_id = int(args[1])
+        days = int(args[2])
+    except ValueError:
+        await message.answer("⚠️ ID и количество дней должны быть числами!")
+        return
+        
+    expires_dt = datetime.now() + timedelta(days=days)
+    expires_str = expires_dt.isoformat()
+    
+    conn = db()
+    conn.execute(
+        "INSERT OR REPLACE INTO allowed_users (user_id, expires_at) VALUES (?, ?)",
+        (target_id, expires_str)
+    )
+    conn.commit()
+    conn.close()
+    
+    await message.answer(f"✅ Доступ для <code>{target_id}</code> успешно выдан на <b>{days}</b> дней (до {expires_dt.strftime('%d.%m.%Y %H:%M')}).", parse_mode="HTML")
+
+
+@dp.message(Command("revoke"))
+async def revoke_user(message: types.Message):
+    if message.from_user.id not in ADMIN_IDS:
+        return
+    args = message.text.split()
+    if len(args) < 2:
+        await message.answer("⚠️ Использование: <code>/revoke [ID]</code>\nПример: <code>/revoke 123456789</code>", parse_mode="HTML")
+        return
+        
+    try:
+        target_id = int(args[1])
+    except ValueError:
+        await message.answer("⚠️ ID должен быть числом!")
+        return
+        
+    conn = db()
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM allowed_users WHERE user_id = ?", (target_id,))
+    deleted = cursor.rowcount
+    conn.commit()
+    conn.close()
+    
+    if deleted > 0:
+        await message.answer(f"⛔️ Доступ для <code>{target_id}</code> успешно аннулирован.", parse_mode="HTML")
+    else:
+        await message.answer(f"❓ Пользователь <code>{target_id}</code> не найден в списке доступов.", parse_mode="HTML")
+
+
+# -------------------------------------------------------------
+# ДРУГИЕ КОМАНДЫ БОТА
+# -------------------------------------------------------------
 @dp.message(F.text.in_({"⚠️ Ближайшие слёты", "Ближайшие слёты"}))
 async def nearest(message: types.Message):
     if not has_access(message.from_user.id): return
@@ -364,10 +449,45 @@ async def dev_set_season(callback: types.CallbackQuery):
 async def status_msg(message: types.Message):
     if not has_access(message.from_user.id): return
     conn = db()
-    rows = conn.execute("SELECT server_name, MAX(last_updated) FROM server_objects GROUP BY server_id ORDER BY last_updated DESC").fetchall()
+    
+    server_status = []
+    for s_id, s_name in SERVERS_LIST:
+        # Берём последнее обновление из истории сканирования
+        row = conn.execute(
+            "SELECT recorded_at FROM scan_history WHERE server_id = ? ORDER BY id DESC LIMIT 1",
+            (str(s_id),)
+        ).fetchone()
+        val = row[0] if row else None
+        
+        # Если в истории нет (например, старая база), берём из активных объектов
+        if not val:
+            row_obj = conn.execute(
+                "SELECT MAX(last_updated) FROM server_objects WHERE server_id = ?",
+                (str(s_id),)
+            ).fetchone()
+            val = row_obj[0] if row_obj else None
+            
+        if val:
+            server_status.append((s_name, val))
+            
     conn.close()
-    lines = ["📍 <b>Последние сейвы:</b>", ""]
-    for name, val in rows: lines.append(f"<code>{name:<14} | {val}</code>")
+    
+    # Сортировка по времени сканирования (от новых к старым)
+    def parse_dt(val_str):
+        try:
+            return datetime.strptime(val_str, "%d.%m.%Y %H:%M:%S")
+        except:
+            return datetime.min
+            
+    server_status.sort(key=lambda x: parse_dt(x[1]), reverse=True)
+    
+    if not server_status:
+        await message.answer("📍 Данных о сканировании пока нет.")
+        return
+        
+    lines = ["📍 <b>Последние сейвы по серверам:</b>", ""]
+    for name, value in server_status:
+        lines.append(f"<code>{name:<14} | {value}</code>")
     await message.answer("\n".join(lines), parse_mode="HTML")
 
 
