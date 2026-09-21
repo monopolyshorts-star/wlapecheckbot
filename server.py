@@ -23,6 +23,8 @@ def ensure_schema():
     columns = {row[1] for row in cursor.execute("PRAGMA table_info(server_objects)").fetchall()}
     if "house_id" not in columns:
         cursor.execute("ALTER TABLE server_objects ADD COLUMN house_id INTEGER;")
+    if "is_frozen" not in columns:
+        cursor.execute("ALTER TABLE server_objects ADD COLUMN is_frozen INTEGER DEFAULT 0;")
     conn.commit()
     conn.close()
 
@@ -46,41 +48,40 @@ class RealtorPayload(BaseModel):
     scan_ts: Optional[float] = None
     items: List[RealtorItem]
 
-# ТАБЛИЦА ПРАВИЛ СЛЁТОВ (Thresholds)
 SERVER_RULES = {
-    "01": {"h_ins": 2, "h_un": 3, "b_ins": 2, "b_un": 3}, # phoenix
-    "02": {"h_ins": 2, "h_un": 3, "b_ins": 2, "b_un": 2}, # tucson
-    "03": {"h_ins": 2, "h_un": 3, "b_ins": 1, "b_un": 2}, # scottdale
-    "04": {"h_ins": 2, "h_un": 3, "b_ins": 1, "b_un": 2}, # chandler
-    "05": {"h_ins": 2, "h_un": 3, "b_ins": 2, "b_un": 2}, # brainburg
-    "06": {"h_ins": 2, "h_un": 3, "b_ins": 2, "b_un": 3}, # saintrose
-    "07": {"h_ins": 2, "h_un": 3, "b_ins": 2, "b_un": 2}, # mesa
-    "08": {"h_ins": 2, "h_un": 3, "b_ins": 1, "b_un": 2}, # redrock
-    "09": {"h_ins": 2, "h_un": 3, "b_ins": 2, "b_un": 3}, # yuma
-    "10": {"h_ins": 2, "h_un": 3, "b_ins": 2, "b_un": 2}, # surprise
-    "11": {"h_ins": 2, "h_un": 3, "b_ins": 2, "b_un": 2}, # prescott
-    "12": {"h_ins": 2, "h_un": 3, "b_ins": 1, "b_un": 2}, # glendale
-    "13": {"h_ins": 2, "h_un": 3, "b_ins": 2, "b_un": 3}, # kingman
-    "14": {"h_ins": 2, "h_un": 3, "b_ins": 1, "b_un": 2}, # winslow
-    "15": {"h_ins": 1, "h_un": 2, "b_ins": 1, "b_un": 2}, # payson
-    "16": {"h_ins": 2, "h_un": 3, "b_ins": 1, "b_un": 2}, # gilbert
-    "17": {"h_ins": 1, "h_un": 2, "b_ins": 1, "b_un": 2}, # showlow
-    "18": {"h_ins": 2, "h_un": 3, "b_ins": 2, "b_un": 3}, # casagrande
-    "19": {"h_ins": 2, "h_un": 3, "b_ins": 2, "b_un": 2}, # page
-    "20": {"h_ins": 1, "h_un": 2, "b_ins": 1, "b_un": 2}, # suncity
-    "21": {"h_ins": 2, "h_un": 3, "b_ins": 2, "b_un": 2}, # queencreek
-    "22": {"h_ins": 2, "h_un": 3, "b_ins": 1, "b_un": 2}, # sedona
-    "23": {"h_ins": 2, "h_un": 3, "b_ins": 2, "b_un": 2}, # holiday
-    "24": {"h_ins": 2, "h_un": 3, "b_ins": 1, "b_un": 2}, # wednesday
-    "25": {"h_ins": 2, "h_un": 3, "b_ins": 1, "b_un": 2}, # yava
-    "26": {"h_ins": 1, "h_un": 2, "b_ins": 2, "b_un": 3}, # faraway
-    "27": {"h_ins": 1, "h_un": 2, "b_ins": 1, "b_un": 2}, # bumblebee
-    "28": {"h_ins": 2, "h_un": 3, "b_ins": 2, "b_un": 3}, # christmas
-    "29": {"h_ins": 2, "h_un": 3, "b_ins": 2, "b_un": 3}, # mirage
-    "30": {"h_ins": 1, "h_un": 2, "b_ins": 2, "b_un": 3}, # love
-    "31": {"h_ins": 2, "h_un": 3, "b_ins": 1, "b_un": 2}, # drake
-    "32": {"h_ins": 1, "h_un": 2, "b_ins": 2, "b_un": 2}, # space
-    "33": {"h_ins": 1, "h_un": 2, "b_ins": 2, "b_un": 2}, # home
+    "01": {"h_ins": 2, "h_un": 3, "b_ins": 2, "b_un": 3},
+    "02": {"h_ins": 2, "h_un": 3, "b_ins": 2, "b_un": 2},
+    "03": {"h_ins": 2, "h_un": 3, "b_ins": 1, "b_un": 2},
+    "04": {"h_ins": 2, "h_un": 3, "b_ins": 1, "b_un": 2},
+    "05": {"h_ins": 2, "h_un": 3, "b_ins": 2, "b_un": 2},
+    "06": {"h_ins": 2, "h_un": 3, "b_ins": 2, "b_un": 3},
+    "07": {"h_ins": 2, "h_un": 3, "b_ins": 2, "b_un": 2},
+    "08": {"h_ins": 2, "h_un": 3, "b_ins": 1, "b_un": 2},
+    "09": {"h_ins": 2, "h_un": 3, "b_ins": 2, "b_un": 3},
+    "10": {"h_ins": 2, "h_un": 3, "b_ins": 2, "b_un": 2},
+    "11": {"h_ins": 2, "h_un": 3, "b_ins": 2, "b_un": 2},
+    "12": {"h_ins": 2, "h_un": 3, "b_ins": 1, "b_un": 2},
+    "13": {"h_ins": 2, "h_un": 3, "b_ins": 2, "b_un": 3},
+    "14": {"h_ins": 2, "h_un": 3, "b_ins": 1, "b_un": 2},
+    "15": {"h_ins": 1, "h_un": 2, "b_ins": 1, "b_un": 2},
+    "16": {"h_ins": 2, "h_un": 3, "b_ins": 1, "b_un": 2},
+    "17": {"h_ins": 1, "h_un": 2, "b_ins": 1, "b_un": 2},
+    "18": {"h_ins": 2, "h_un": 3, "b_ins": 2, "b_un": 3},
+    "19": {"h_ins": 2, "h_un": 3, "b_ins": 2, "b_un": 2},
+    "20": {"h_ins": 1, "h_un": 2, "b_ins": 1, "b_un": 2},
+    "21": {"h_ins": 2, "h_un": 3, "b_ins": 2, "b_un": 2},
+    "22": {"h_ins": 2, "h_un": 3, "b_ins": 1, "b_un": 2},
+    "23": {"h_ins": 2, "h_un": 3, "b_ins": 2, "b_un": 2},
+    "24": {"h_ins": 2, "h_un": 3, "b_ins": 1, "b_un": 2},
+    "25": {"h_ins": 2, "h_un": 3, "b_ins": 1, "b_un": 2},
+    "26": {"h_ins": 1, "h_un": 2, "b_ins": 2, "b_un": 3},
+    "27": {"h_ins": 1, "h_un": 2, "b_ins": 1, "b_un": 2},
+    "28": {"h_ins": 2, "h_un": 3, "b_ins": 2, "b_un": 3},
+    "29": {"h_ins": 2, "h_un": 3, "b_ins": 2, "b_un": 3},
+    "30": {"h_ins": 1, "h_un": 2, "b_ins": 2, "b_un": 3},
+    "31": {"h_ins": 2, "h_un": 3, "b_ins": 1, "b_un": 2},
+    "32": {"h_ins": 1, "h_un": 2, "b_ins": 2, "b_un": 2},
+    "33": {"h_ins": 1, "h_un": 2, "b_ins": 2, "b_un": 2},
 }
 
 def get_payday_slot_hour(dt: datetime) -> datetime:
@@ -140,17 +141,14 @@ async def update_objects(payload: RealtorPayload):
         m_season = cursor.fetchone()
         active_season = m_season[0] if m_season and m_season[0] else payload.season
 
-        # --- ОБРАБОТКА ПУСТОЙ РИЕЛТОРКИ ---
+        # Пустая риелторка
         if len(payload.items) == 0:
-            # Стираем все активные слёты для этого сервера
             cursor.execute("DELETE FROM server_objects WHERE server_id = ?", (str(payload.server_id),))
-            # Сохраняем событие очистки в историю
             cursor.execute("INSERT INTO scan_history (server_id, slot, obj_type, payday, recorded_at) VALUES (?, 0, 'Пусто', 0, ?)", (str(payload.server_id), now_str))
             conn.commit()
             conn.close()
             print(f"[API УСПЕХ] Сервер {payload.server_name} полностью очищен (пустая риелторка)!", flush=True)
             return {"status": "success", "count": 0}
-        # ----------------------------------
 
         cursor.execute("SELECT recorded_at FROM scan_history WHERE server_id = ? ORDER BY id DESC LIMIT 1", (str(payload.server_id),))
         last_global_row = cursor.fetchone()
@@ -182,8 +180,6 @@ async def update_objects(payload: RealtorPayload):
 
         distinct_types = set(item.type for item in payload.items)
         for obj_type in distinct_types:
-            # --- ЛОГИКА СКЛЕЙКИ СТРАНИЦ ---
-            # Проверяем дату последнего обновления именно этого типа объектов на данном сервере
             cursor.execute("""
                 SELECT MAX(last_updated) FROM server_objects 
                 WHERE server_id = ? AND obj_type = ?
@@ -194,19 +190,16 @@ async def update_objects(payload: RealtorPayload):
             if last_up_row and last_up_row[0]:
                 try:
                     last_up_dt = datetime.strptime(last_up_row[0], "%d.%m.%Y %H:%M:%S")
-                    # Если прошло меньше 60 секунд, это продолжение сканирования (перелистывание страниц)
                     if (now - last_up_dt).total_seconds() < 60:
                         is_paged_scan = True
                 except Exception as e:
                     print(f"[Paged Check Error] {e}", flush=True)
 
-            # Если это новый сеанс (не многостраничный), удаляем старые записи
             if not is_paged_scan:
                 type_slots = [item.slot for item in payload.items if item.type == obj_type]
                 if type_slots:
                     placeholders = ",".join("?" for _ in type_slots)
                     cursor.execute(f"DELETE FROM server_objects WHERE server_id = ? AND obj_type = ? AND slot NOT IN ({placeholders})", [str(payload.server_id), obj_type] + type_slots)
-            # ------------------------------
 
         matched_prev_items = set()
 
@@ -255,6 +248,18 @@ async def update_objects(payload: RealtorPayload):
             else:
                 if not insurance: insurance = "Неизвестно"
 
+            # --- ЛОГИКА ЗАМОРОЗКИ (is_frozen) ---
+            # Сравниваем с предыдущим payday этого же слота/дома
+            is_frozen = 0
+            prev_pd_val = matched_prev["payday"] if matched_prev else None
+            
+            if prev_pd_val is not None:
+                if item.payday == prev_pd_val:
+                    is_frozen = 1  # Заморожен (payday не уменьшился)
+                else:
+                    is_frozen = 0  # Сдвинулся (уменьшился) — активный слёт
+            # ------------------------------------
+
             fall_time = calculate_fall_time(str(payload.server_id), item.type, item.payday, insurance, now)
 
             cursor.execute("""
@@ -263,15 +268,16 @@ async def update_objects(payload: RealtorPayload):
                     payday, insurance_status, exact_fall_time, last_updated, 
                     is_frozen, is_h2, is_estate
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 0)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0)
                 ON CONFLICT(server_id, slot, obj_type) DO UPDATE SET
                     payday = excluded.payday,
                     house_id = COALESCE(excluded.house_id, server_objects.house_id),
                     insurance_status = excluded.insurance_status,
                     season = excluded.season,
                     exact_fall_time = excluded.exact_fall_time,
-                    last_updated = excluded.last_updated
-            """, (str(payload.server_id), payload.server_name, active_season, item.type, item.slot, item.house_id, item.payday, insurance, fall_time, now_str))
+                    last_updated = excluded.last_updated,
+                    is_frozen = excluded.is_frozen
+            """, (str(payload.server_id), payload.server_name, active_season, item.type, item.slot, item.house_id, item.payday, insurance, fall_time, now_str, is_frozen))
 
             cursor.execute("INSERT INTO scan_history (server_id, slot, obj_type, payday, recorded_at) VALUES (?, ?, ?, ?, ?)", (str(payload.server_id), item.slot, item.type, item.payday, now_str))
 
