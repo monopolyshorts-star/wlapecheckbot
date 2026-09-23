@@ -39,7 +39,7 @@ class RealtorPayload(BaseModel):
     server_name: str
     season: Optional[str] = "Неизвестно"
     scan_ts: Optional[float] = None
-    items: Any = [] # Принимаем любые данные, чтобы избежать 422 ошибки от Lua
+    items: Any = []
 
 SERVER_RULES = {
     "01": {"h_ins": 2, "h_un": 3, "b_ins": 2, "b_un": 3},
@@ -119,13 +119,11 @@ def calculate_fall_time(server_id: str, obj_type: str, payday_val: int, insuranc
 @app.post("/api/update")
 async def update_objects(payload: RealtorPayload):
     try:
-        # Конвертируем items в список. Если Lua прислал {}, это станет словарем Python.
         raw_items = payload.items
         items_list = []
         if isinstance(raw_items, list):
             items_list = raw_items
         elif isinstance(raw_items, dict) and len(raw_items) > 0:
-            # Если это не пустой словарь (вдруг Lua так прислал), пробуем взять значения
             items_list = list(raw_items.values())
         
         print(f"[API] Пакет от {payload.server_name} [{payload.server_id}], объектов: {len(items_list)}", flush=True)
@@ -143,7 +141,7 @@ async def update_objects(payload: RealtorPayload):
         m_season = cursor.fetchone()
         active_season = m_season[0] if m_season and m_season[0] else payload.season
 
-        # Полная очистка, если список объектов пуст
+        # Полная очистка при пустой риелторке
         if len(items_list) == 0:
             cursor.execute("DELETE FROM server_objects WHERE server_id = ?", (str(payload.server_id),))
             cursor.execute("INSERT INTO scan_history (server_id, slot, obj_type, payday, recorded_at) VALUES (?, 0, 'Пусто', 0, ?)", (str(payload.server_id), now_str))
@@ -152,37 +150,64 @@ async def update_objects(payload: RealtorPayload):
             print(f"[API УСПЕХ] Сервер {payload.server_name} полностью очищен (риелторка пуста)!", flush=True)
             return {"status": "success", "count": 0}
 
-        cursor.execute("SELECT recorded_at FROM scan_history WHERE server_id = ? ORDER BY id DESC LIMIT 1", (str(payload.server_id),))
-        last_global_row = cursor.fetchone()
+        # Группируем входящие объекты по типам (Дом / Бизнес)
+        grouped_by_type = {}
+        for item in items_list:
+            if isinstance(item, dict):
+                grouped_by_type.setdefault(item.get("type"), []).append(item)
 
-        last_scan_items = {}
-        last_scan_by_pd = {}
-        hours_diff = 0
-        last_dt = None
+        for obj_type, type_items in grouped_by_type.items():
+            # Находим последние 10 записей истории сканов
+            cursor.execute("""
+                SELECT DISTINCT recorded_at FROM scan_history 
+                WHERE server_id = ? AND obj_type = ? 
+                ORDER BY id DESC LIMIT 10
+            """, (str(payload.server_id), obj_type))
+            history_rows = cursor.fetchall()
 
-        if last_global_row and last_global_row[0]:
-            try:
-                last_time_str = last_global_row[0]
-                last_dt = datetime.strptime(last_time_str, "%d.%m.%Y %H:%M:%S")
-                diff_hours_calc = int(round((get_payday_slot_hour(now) - get_payday_slot_hour(last_dt)).total_seconds() / 3600.0))
-                hours_diff = diff_hours_calc if 1 <= diff_hours_calc <= 24 else 0
+            # Ищем самый свежий скан, который сделан более 3 минут назад
+            last_time_str = None
+            last_dt = None
+            for (h_time_str,) in history_rows:
+                try:
+                    h_dt = datetime.strptime(h_time_str, "%d.%m.%Y %H:%M:%S")
+                    if (now - h_dt).total_seconds() >= 180:
+                        last_time_str = h_time_str
+                        last_dt = h_dt
+                        break
+                except:
+                    continue
 
-                cursor.execute("""
-                    SELECT sh.slot, sh.obj_type, sh.payday, so.house_id, so.insurance_status
-                    FROM scan_history sh
-                    LEFT JOIN server_objects so ON sh.server_id = so.server_id AND sh.slot = so.slot AND sh.obj_type = so.obj_type
-                    WHERE sh.server_id = ? AND sh.recorded_at = ?
-                """, (str(payload.server_id), last_time_str))
-                for prev_slot_num, prev_type, prev_pd, prev_hid, prev_ins in cursor.fetchall():
-                    item_dict = {"slot": prev_slot_num, "type": prev_type, "payday": prev_pd, "house_id": prev_hid, "insurance": prev_ins or "Неизвестно"}
-                    if prev_hid: last_scan_items[(prev_type, "hid", prev_hid)] = item_dict
-                    last_scan_items[(prev_type, "slot", prev_slot_num)] = item_dict
-                    last_scan_by_pd.setdefault((prev_type, prev_pd), []).append(item_dict)
-            except Exception as e:
-                print(f"[History Load Error] {e}", flush=True)
+            last_scan_items = {}
+            last_scan_by_pd = {}
+            hours_diff = 0
 
-        distinct_types = set(item.get("type") for item in items_list if isinstance(item, dict))
-        for obj_type in distinct_types:
+            if last_time_str and last_dt:
+                try:
+                    diff_hours_calc = int(round((get_payday_slot_hour(now) - get_payday_slot_hour(last_dt)).total_seconds() / 3600.0))
+                    hours_diff = diff_hours_calc if 1 <= diff_hours_calc <= 24 else 0
+
+                    cursor.execute("""
+                        SELECT sh.slot, sh.obj_type, sh.payday, so.house_id, so.insurance_status
+                        FROM scan_history sh
+                        LEFT JOIN server_objects so ON sh.server_id = so.server_id AND sh.slot = so.slot AND sh.obj_type = so.obj_type
+                        WHERE sh.server_id = ? AND sh.obj_type = ? AND sh.recorded_at = ?
+                    """, (str(payload.server_id), obj_type, last_time_str))
+                    for prev_slot_num, prev_type, prev_pd, prev_hid, prev_ins in cursor.fetchall():
+                        item_dict = {
+                            "slot": prev_slot_num, 
+                            "type": prev_type, 
+                            "payday": prev_pd, 
+                            "house_id": prev_hid, 
+                            "insurance": prev_ins or "Неизвестно"
+                        }
+                        if prev_hid: 
+                            last_scan_items[(prev_type, "hid", prev_hid)] = item_dict
+                        last_scan_items[(prev_type, "slot", prev_slot_num)] = item_dict
+                        last_scan_by_pd.setdefault((prev_type, prev_pd), []).append(item_dict)
+                except Exception as e:
+                    print(f"[History Load Error {obj_type}] {e}", flush=True)
+
             cursor.execute("""
                 SELECT MAX(last_updated) FROM server_objects 
                 WHERE server_id = ? AND obj_type = ?
@@ -199,93 +224,125 @@ async def update_objects(payload: RealtorPayload):
                     print(f"[Paged Check Error] {e}", flush=True)
 
             if not is_paged_scan:
-                type_slots = [item.get("slot") for item in items_list if isinstance(item, dict) and item.get("type") == obj_type]
+                type_slots = [item.get("slot") for item in type_items]
                 if type_slots:
                     placeholders = ",".join("?" for _ in type_slots)
                     cursor.execute(f"DELETE FROM server_objects WHERE server_id = ? AND obj_type = ? AND slot NOT IN ({placeholders})", [str(payload.server_id), obj_type] + type_slots)
 
-        matched_prev_items = set()
+            matched_prev_items = set()
 
-        for item in items_list:
-            if not isinstance(item, dict): continue
-            
-            i_slot = item.get("slot")
-            i_hid = item.get("house_id")
-            i_pd = item.get("payday")
-            i_type = item.get("type")
-            insurance = item.get("state")
-            matched_prev = None
+            for item in type_items:
+                i_slot = item.get("slot")
+                i_hid = item.get("house_id")
+                i_pd = item.get("payday")
+                i_type = item.get("type")
+                insurance = item.get("state")
+                matched_prev = None
 
-            if i_hid and (i_type, "hid", i_hid) in last_scan_items:
-                matched_prev = last_scan_items[(i_type, "hid", i_hid)]
-            elif hours_diff == 0 and (i_type, "slot", i_slot) in last_scan_items:
-                prev = last_scan_items[(i_type, "slot", i_slot)]
-                if prev["payday"] == i_pd: matched_prev = prev
-            elif hours_diff > 0:
-                candidate = last_scan_items.get((i_type, "slot", i_slot))
-                if candidate and id(candidate) not in matched_prev_items:
-                    drop = candidate["payday"] - i_pd
-                    expected_rates = [1, 2] if i_type == "Дом" else [1, 2, 4]
-                    if any(drop == rate * hours_diff for rate in expected_rates): matched_prev = candidate
-                if not matched_prev:
-                    expected_rates = [1, 2] if i_type == "Дом" else [1, 2, 4]
-                    for rate in expected_rates:
-                        old_needed_pd = i_pd + (rate * hours_diff)
-                        candidates = last_scan_by_pd.get((i_type, old_needed_pd), [])
-                        for cand in candidates:
-                            if id(cand) not in matched_prev_items:
-                                matched_prev = cand
-                                break
-                        if matched_prev: break
-
-            if matched_prev:
-                matched_prev_items.add(id(matched_prev))
-                if matched_prev.get("insurance") and matched_prev["insurance"] != "Неизвестно":
-                    insurance = matched_prev["insurance"]
+                # 1. Сначала ищем по house_id (самое точное совпадение)
+                if i_hid and (i_type, "hid", i_hid) in last_scan_items:
+                    matched_prev = last_scan_items[(i_type, "hid", i_hid)]
+                
+                # 2. Если внутри того же часа (hours_diff == 0) — ищем по той же позиции и payday
+                elif hours_diff == 0 and (i_type, "slot", i_slot) in last_scan_items:
+                    prev = last_scan_items[(i_type, "slot", i_slot)]
+                    if prev["payday"] == i_pd: 
+                        matched_prev = prev
+                
+                # 3. Если сменился час (hours_diff > 0) — ищем по позиции с проверкой слёта
                 elif hours_diff > 0:
-                    pd_diff = matched_prev["payday"] - i_pd
-                    drop_speed = pd_diff / hours_diff
-                    if i_type == "Бизнес":
-                        if drop_speed >= 3.0: insurance = "Нестрах, Без занятости"
-                        elif drop_speed >= 1.5: insurance = "Страх, Незанят"
-                        elif drop_speed >= 0.8: insurance = "Страх, Занят"
-                        else: insurance = "Неизвестно"
-                    else:
-                        if drop_speed >= 1.5: insurance = "Нестрах"
-                        elif drop_speed >= 0.8: insurance = "Страх"
-                        else: insurance = "Неизвестно"
-            
-            if not insurance: insurance = "Неизвестно"
+                    candidate = last_scan_items.get((i_type, "slot", i_slot))
+                    if candidate and id(candidate) not in matched_prev_items:
+                        drop = candidate["payday"] - i_pd
+                        expected_rates = [1, 2] if i_type == "Дом" else [1, 2, 4]
+                        if any(drop == rate * hours_diff for rate in expected_rates) or drop == 0: 
+                            matched_prev = candidate
+                    
+                    # 4. Резервный поиск по PayDay (если позиция в списке сдвинулась)
+                    if not matched_prev:
+                        expected_rates = [1, 2] if i_type == "Дом" else [1, 2, 4]
+                        for rate in expected_rates + [0]: 
+                            old_needed_pd = i_pd + (rate * hours_diff)
+                            candidates = last_scan_by_pd.get((i_type, old_needed_pd), [])
+                            for cand in candidates:
+                                if id(cand) not in matched_prev_items:
+                                    matched_prev = cand
+                                    break
+                            if matched_prev: 
+                                break
 
-            is_frozen = 0
-            prev_pd_val = matched_prev["payday"] if matched_prev else None
-            if hours_diff >= 1 and prev_pd_val is not None:
-                if i_pd == prev_pd_val:
-                    is_frozen = 1
+                # Рассчитываем и жестко наследуем статус страховки
+                if matched_prev:
+                    matched_prev_items.add(id(matched_prev))
+                    old_insurance = matched_prev.get("insurance")
+                    
+                    if old_insurance and old_insurance != "Неизвестно":
+                        insurance = old_insurance
+                    elif hours_diff > 0:
+                        pd_diff = matched_prev["payday"] - i_pd
+                        drop_speed = pd_diff / hours_diff
+                        if i_type == "Бизнес":
+                            if drop_speed >= 3.0: 
+                                insurance = "Нестрах, Без занятости"
+                            elif drop_speed >= 1.5: 
+                                insurance = "Страх, Без занят"
+                            elif drop_speed >= 0.8: 
+                                insurance = "Страх, Занят"
+                            else: 
+                                insurance = "Неизвестно"
+                        else:
+                            if drop_speed >= 1.5: 
+                                insurance = "Нестрах"
+                            elif drop_speed >= 0.8: 
+                                insurance = "Страх"
+                            else: 
+                                insurance = "Неизвестно"
+                    
+                    # Если расчёт дал "Неизвестно", но раньше страховка была известна — возвращаем старую
+                    if insurance == "Неизвестно" and old_insurance and old_insurance != "Неизвестно":
+                        insurance = old_insurance
                 else:
-                    is_frozen = 0
+                    if not insurance: 
+                        insurance = "Неизвестно"
 
-            fall_time = calculate_fall_time(str(payload.server_id), i_type, i_pd, insurance, now)
+                # Вычисляем заморозку
+                is_frozen = 0
+                prev_pd_val = matched_prev["payday"] if matched_prev else None
+                if hours_diff >= 1 and prev_pd_val is not None:
+                    if i_pd == prev_pd_val:
+                        is_frozen = 1
+                    else:
+                        is_frozen = 0
+                elif hours_diff == 0 and matched_prev is not None:
+                    # Сохраняем состояние заморозки при повторных кликах в один час
+                    cursor.execute("""
+                        SELECT is_frozen FROM server_objects 
+                        WHERE server_id = ? AND slot = ? AND obj_type = ?
+                    """, (str(payload.server_id), i_slot, i_type))
+                    row_fr = cursor.fetchone()
+                    if row_fr:
+                        is_frozen = row_fr[0]
 
-            # house_id = excluded.house_id ПЕРЕЗАПИСЫВАЕТ ID, чтобы старые ID не висели при смене сезона
-            cursor.execute("""
-                INSERT INTO server_objects (
-                    server_id, server_name, season, obj_type, slot, house_id, 
-                    payday, insurance_status, exact_fall_time, last_updated, 
-                    is_frozen, is_h2, is_estate
-                )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0)
-                ON CONFLICT(server_id, slot, obj_type) DO UPDATE SET
-                    payday = excluded.payday,
-                    house_id = excluded.house_id,
-                    insurance_status = excluded.insurance_status,
-                    season = excluded.season,
-                    exact_fall_time = excluded.exact_fall_time,
-                    last_updated = excluded.last_updated,
-                    is_frozen = excluded.is_frozen
-            """, (str(payload.server_id), payload.server_name, active_season, i_type, i_slot, i_hid, i_pd, insurance, fall_time, now_str, is_frozen))
+                fall_time = calculate_fall_time(str(payload.server_id), i_type, i_pd, insurance, now)
 
-            cursor.execute("INSERT INTO scan_history (server_id, slot, obj_type, payday, recorded_at) VALUES (?, ?, ?, ?, ?)", (str(payload.server_id), i_slot, i_type, i_pd, now_str))
+                cursor.execute("""
+                    INSERT INTO server_objects (
+                        server_id, server_name, season, obj_type, slot, house_id, 
+                        payday, insurance_status, exact_fall_time, last_updated, 
+                        is_frozen, is_h2, is_estate
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0)
+                    ON CONFLICT(server_id, slot, obj_type) DO UPDATE SET
+                        payday = excluded.payday,
+                        house_id = excluded.house_id,
+                        insurance_status = excluded.insurance_status,
+                        season = excluded.season,
+                        exact_fall_time = excluded.exact_fall_time,
+                        last_updated = excluded.last_updated,
+                        is_frozen = excluded.is_frozen
+                """, (str(payload.server_id), payload.server_name, active_season, i_type, i_slot, i_hid, i_pd, insurance, fall_time, now_str, is_frozen))
+
+                cursor.execute("INSERT INTO scan_history (server_id, slot, obj_type, payday, recorded_at) VALUES (?, ?, ?, ?, ?)", (str(payload.server_id), i_slot, i_type, i_pd, now_str))
 
         conn.commit()
         conn.close()
