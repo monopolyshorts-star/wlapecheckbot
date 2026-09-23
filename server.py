@@ -39,6 +39,7 @@ class RealtorPayload(BaseModel):
     server_name: str
     season: Optional[str] = "Неизвестно"
     scan_ts: Optional[float] = None
+    scan_type: Optional[str] = None # 'Дом' или 'Бизнес'
     items: Any = []
 
 SERVER_RULES = {
@@ -126,7 +127,7 @@ async def update_objects(payload: RealtorPayload):
         elif isinstance(raw_items, dict) and len(raw_items) > 0:
             items_list = list(raw_items.values())
         
-        print(f"[API] Пакет от {payload.server_name} [{payload.server_id}], объектов: {len(items_list)}", flush=True)
+        print(f"[API] Пакет от {payload.server_name} [{payload.server_id}], тип: {payload.scan_type}, объектов: {len(items_list)}", flush=True)
         conn = sqlite3.connect(DB_NAME)
         cursor = conn.cursor()
         
@@ -141,23 +142,22 @@ async def update_objects(payload: RealtorPayload):
         m_season = cursor.fetchone()
         active_season = m_season[0] if m_season and m_season[0] else payload.season
 
-        # Полная очистка при пустой риелторке
+        # УМНАЯ ОЧИСТКА ТОЛЬКО ПУСТОГО РАЗДЕЛА (Дома ИЛИ Бизнесы)
         if len(items_list) == 0:
-            cursor.execute("DELETE FROM server_objects WHERE server_id = ?", (str(payload.server_id),))
-            cursor.execute("INSERT INTO scan_history (server_id, slot, obj_type, payday, recorded_at) VALUES (?, 0, 'Пусто', 0, ?)", (str(payload.server_id), now_str))
+            target_del_type = payload.scan_type or "Дом"
+            cursor.execute("DELETE FROM server_objects WHERE server_id = ? AND obj_type = ?", (str(payload.server_id), target_del_type))
+            cursor.execute("INSERT INTO scan_history (server_id, slot, obj_type, payday, recorded_at) VALUES (?, 0, ?, 0, ?)", (str(payload.server_id), f"Пусто_{target_del_type}", now_str))
             conn.commit()
             conn.close()
-            print(f"[API УСПЕХ] Сервер {payload.server_name} полностью очищен (риелторка пуста)!", flush=True)
+            print(f"[API УСПЕХ] Раздел '{target_del_type}' на сервере {payload.server_name} успешно очищен!", flush=True)
             return {"status": "success", "count": 0}
 
-        # Группируем входящие объекты по типам (Дом / Бизнес)
         grouped_by_type = {}
         for item in items_list:
             if isinstance(item, dict):
                 grouped_by_type.setdefault(item.get("type"), []).append(item)
 
         for obj_type, type_items in grouped_by_type.items():
-            # Находим последние 10 записей истории сканов
             cursor.execute("""
                 SELECT DISTINCT recorded_at FROM scan_history 
                 WHERE server_id = ? AND obj_type = ? 
@@ -165,7 +165,6 @@ async def update_objects(payload: RealtorPayload):
             """, (str(payload.server_id), obj_type))
             history_rows = cursor.fetchall()
 
-            # Ищем самый свежий скан, который сделан более 3 минут назад
             last_time_str = None
             last_dt = None
             for (h_time_str,) in history_rows:
@@ -239,17 +238,12 @@ async def update_objects(payload: RealtorPayload):
                 insurance = item.get("state")
                 matched_prev = None
 
-                # 1. Сначала ищем по house_id (самое точное совпадение)
                 if i_hid and (i_type, "hid", i_hid) in last_scan_items:
                     matched_prev = last_scan_items[(i_type, "hid", i_hid)]
-                
-                # 2. Если внутри того же часа (hours_diff == 0) — ищем по той же позиции и payday
                 elif hours_diff == 0 and (i_type, "slot", i_slot) in last_scan_items:
                     prev = last_scan_items[(i_type, "slot", i_slot)]
                     if prev["payday"] == i_pd: 
                         matched_prev = prev
-                
-                # 3. Если сменился час (hours_diff > 0) — ищем по позиции с проверкой слёта
                 elif hours_diff > 0:
                     candidate = last_scan_items.get((i_type, "slot", i_slot))
                     if candidate and id(candidate) not in matched_prev_items:
@@ -258,7 +252,6 @@ async def update_objects(payload: RealtorPayload):
                         if any(drop == rate * hours_diff for rate in expected_rates) or drop == 0: 
                             matched_prev = candidate
                     
-                    # 4. Резервный поиск по PayDay (если позиция в списке сдвинулась)
                     if not matched_prev:
                         expected_rates = [1, 2] if i_type == "Дом" else [1, 2, 4]
                         for rate in expected_rates + [0]: 
@@ -271,41 +264,54 @@ async def update_objects(payload: RealtorPayload):
                             if matched_prev: 
                                 break
 
-                # Рассчитываем и жестко наследуем статус страховки
+                # Ищем предыдущую запись в БД напрямую, если не нашли через историю
+                old_insurance = None
                 if matched_prev:
                     matched_prev_items.add(id(matched_prev))
                     old_insurance = matched_prev.get("insurance")
-                    
-                    if old_insurance and old_insurance != "Неизвестно":
-                        insurance = old_insurance
-                    elif hours_diff > 0:
-                        pd_diff = matched_prev["payday"] - i_pd
-                        drop_speed = pd_diff / hours_diff
-                        if i_type == "Бизнес":
-                            if drop_speed >= 3.0: 
-                                insurance = "Нестрах, Без занятости"
-                            elif drop_speed >= 1.5: 
-                                insurance = "Страх, Без занят"
-                            elif drop_speed >= 0.8: 
-                                insurance = "Страх, Занят"
-                            else: 
-                                insurance = "Неизвестно"
-                        else:
-                            if drop_speed >= 1.5: 
-                                insurance = "Нестрах"
-                            elif drop_speed >= 0.8: 
-                                insurance = "Страх"
-                            else: 
-                                insurance = "Неизвестно"
-                    
-                    # Если расчёт дал "Неизвестно", но раньше страховка была известна — возвращаем старую
-                    if insurance == "Неизвестно" and old_insurance and old_insurance != "Неизвестно":
-                        insurance = old_insurance
-                else:
-                    if not insurance: 
-                        insurance = "Неизвестно"
+                
+                if not old_insurance or old_insurance == "Неизвестно":
+                    cursor.execute("""
+                        SELECT insurance_status FROM server_objects 
+                        WHERE server_id = ? AND slot = ? AND obj_type = ?
+                    """, (str(payload.server_id), i_slot, i_type))
+                    row_ins = cursor.fetchone()
+                    if row_ins and row_ins[0] and row_ins[0] != "Неизвестно":
+                        old_insurance = row_ins[0]
 
-                # Вычисляем заморозку
+                if old_insurance and old_insurance != "Неизвестно":
+                    insurance = old_insurance
+                elif hours_diff > 0 and matched_prev:
+                    pd_diff = matched_prev["payday"] - i_pd
+                    drop_speed = pd_diff / hours_diff
+                    if i_type == "Бизнес":
+                        if drop_speed >= 3.0: insurance = "Нестрах, Без занятости"
+                        elif drop_speed >= 1.5: insurance = "Страх, Без занят"
+                        elif drop_speed >= 0.8: insurance = "Страх, Занят"
+                        else: insurance = "Неизвестно"
+                    else:
+                        if drop_speed >= 1.5: insurance = "Нестрах"
+                        elif drop_speed >= 0.8: insurance = "Страх"
+                        else: insurance = "Неизвестно"
+                else:
+                    # Если данных нет, пытаемся угадать по правилам сервера для текущего payday
+                    sid = str(payload.server_id).zfill(2)
+                    rules = SERVER_RULES.get(sid, SERVER_RULES["01"])
+                    if i_type == "Дом":
+                        if i_pd == rules["h_ins"]:
+                            insurance = "Страх"
+                        elif i_pd == rules["h_un"]:
+                            insurance = "Нестрах"
+                        else:
+                            insurance = "Неизвестно"
+                    else:
+                        if i_pd == rules["b_ins"]:
+                            insurance = "Страх, Занят"
+                        elif i_pd == rules["b_un"]:
+                            insurance = "Нестрах, Без занятости"
+                        else:
+                            insurance = "Неизвестно"
+
                 is_frozen = 0
                 prev_pd_val = matched_prev["payday"] if matched_prev else None
                 if hours_diff >= 1 and prev_pd_val is not None:
@@ -314,7 +320,6 @@ async def update_objects(payload: RealtorPayload):
                     else:
                         is_frozen = 0
                 elif hours_diff == 0 and matched_prev is not None:
-                    # Сохраняем состояние заморозки при повторных кликах в один час
                     cursor.execute("""
                         SELECT is_frozen FROM server_objects 
                         WHERE server_id = ? AND slot = ? AND obj_type = ?
