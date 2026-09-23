@@ -141,7 +141,7 @@ async def update_objects(payload: RealtorPayload):
         m_season = cursor.fetchone()
         active_season = m_season[0] if m_season and m_season[0] else payload.season
 
-        # Обработка пустой риелторки
+        # Полная очистка, если риелторка пуста
         if len(payload.items) == 0:
             cursor.execute("DELETE FROM server_objects WHERE server_id = ?", (str(payload.server_id),))
             cursor.execute("INSERT INTO scan_history (server_id, slot, obj_type, payday, recorded_at) VALUES (?, 0, 'Пусто', 0, ?)", (str(payload.server_id), now_str))
@@ -249,21 +249,18 @@ async def update_objects(payload: RealtorPayload):
             else:
                 if not insurance: insurance = "Неизвестно"
 
-            # --- ИСПРАВЛЕННАЯ ЛОГИКА ЗАМОРОЗКИ ---
             is_frozen = 0
             prev_pd_val = matched_prev["payday"] if matched_prev else None
             
-            # Замораживаем только если реально прошел хотя бы 1 час (hours_diff >= 1)
-            # и при этом payday не изменился по сравнению с прошлым часом
             if hours_diff >= 1 and prev_pd_val is not None:
                 if item.payday == prev_pd_val:
                     is_frozen = 1
                 else:
                     is_frozen = 0
-            # ------------------------------------
 
             fall_time = calculate_fall_time(str(payload.server_id), item.type, item.payday, insurance, now)
 
+            # ПЕРЕЗАПИСЬ house_id: если в игре (Неизвестно), то house_id=None
             cursor.execute("""
                 INSERT INTO server_objects (
                     server_id, server_name, season, obj_type, slot, house_id, 
@@ -273,7 +270,7 @@ async def update_objects(payload: RealtorPayload):
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0)
                 ON CONFLICT(server_id, slot, obj_type) DO UPDATE SET
                     payday = excluded.payday,
-                    house_id = COALESCE(excluded.house_id, server_objects.house_id),
+                    house_id = excluded.house_id,
                     insurance_status = excluded.insurance_status,
                     season = excluded.season,
                     exact_fall_time = excluded.exact_fall_time,
