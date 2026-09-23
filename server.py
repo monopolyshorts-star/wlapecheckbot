@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 from typing import List, Optional, Any, Union, Dict
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel
 from database import DB_NAME, init_db
 
 app = FastAPI(title="Arizona Tracker API")
@@ -34,28 +34,12 @@ ensure_schema()
 def read_root():
     return {"status": "online", "service": "Arizona Tracker API is running"}
 
-class RealtorItem(BaseModel):
-    slot: int
-    house_id: Optional[int] = None
-    payday: int
-    type: str
-    state: Optional[str] = None
-
 class RealtorPayload(BaseModel):
     server_id: Any
     server_name: str
     season: Optional[str] = "Неизвестно"
     scan_ts: Optional[float] = None
-    # Принимаем и список [], и пустой Lua-словарь {}
-    items: Union[List[RealtorItem], Dict[Any, Any]] = []
-
-    @field_validator("items", mode="before")
-    @classmethod
-    def convert_empty_dict_to_list(cls, v):
-        # Если Lua прислал пустую таблицу как {}, превращаем её в []
-        if isinstance(v, dict):
-            return []
-        return v
+    items: Any = [] # Принимаем любые данные, чтобы избежать 422 ошибки от Lua
 
 SERVER_RULES = {
     "01": {"h_ins": 2, "h_un": 3, "b_ins": 2, "b_un": 3},
@@ -135,7 +119,15 @@ def calculate_fall_time(server_id: str, obj_type: str, payday_val: int, insuranc
 @app.post("/api/update")
 async def update_objects(payload: RealtorPayload):
     try:
-        items_list = payload.items if isinstance(payload.items, list) else []
+        # Конвертируем items в список. Если Lua прислал {}, это станет словарем Python.
+        raw_items = payload.items
+        items_list = []
+        if isinstance(raw_items, list):
+            items_list = raw_items
+        elif isinstance(raw_items, dict) and len(raw_items) > 0:
+            # Если это не пустой словарь (вдруг Lua так прислал), пробуем взять значения
+            items_list = list(raw_items.values())
+        
         print(f"[API] Пакет от {payload.server_name} [{payload.server_id}], объектов: {len(items_list)}", flush=True)
         conn = sqlite3.connect(DB_NAME)
         cursor = conn.cursor()
@@ -151,13 +143,13 @@ async def update_objects(payload: RealtorPayload):
         m_season = cursor.fetchone()
         active_season = m_season[0] if m_season and m_season[0] else payload.season
 
-        # Полная очистка, если риелторка пуста
+        # Полная очистка, если список объектов пуст
         if len(items_list) == 0:
             cursor.execute("DELETE FROM server_objects WHERE server_id = ?", (str(payload.server_id),))
             cursor.execute("INSERT INTO scan_history (server_id, slot, obj_type, payday, recorded_at) VALUES (?, 0, 'Пусто', 0, ?)", (str(payload.server_id), now_str))
             conn.commit()
             conn.close()
-            print(f"[API УСПЕХ] Сервер {payload.server_name} полностью очищен (пустая риелторка)!", flush=True)
+            print(f"[API УСПЕХ] Сервер {payload.server_name} полностью очищен (риелторка пуста)!", flush=True)
             return {"status": "success", "count": 0}
 
         cursor.execute("SELECT recorded_at FROM scan_history WHERE server_id = ? ORDER BY id DESC LIMIT 1", (str(payload.server_id),))
@@ -189,7 +181,7 @@ async def update_objects(payload: RealtorPayload):
             except Exception as e:
                 print(f"[History Load Error] {e}", flush=True)
 
-        distinct_types = set(item.type for item in items_list)
+        distinct_types = set(item.get("type") for item in items_list if isinstance(item, dict))
         for obj_type in distinct_types:
             cursor.execute("""
                 SELECT MAX(last_updated) FROM server_objects 
@@ -207,7 +199,7 @@ async def update_objects(payload: RealtorPayload):
                     print(f"[Paged Check Error] {e}", flush=True)
 
             if not is_paged_scan:
-                type_slots = [item.slot for item in items_list if item.type == obj_type]
+                type_slots = [item.get("slot") for item in items_list if isinstance(item, dict) and item.get("type") == obj_type]
                 if type_slots:
                     placeholders = ",".join("?" for _ in type_slots)
                     cursor.execute(f"DELETE FROM server_objects WHERE server_id = ? AND obj_type = ? AND slot NOT IN ({placeholders})", [str(payload.server_id), obj_type] + type_slots)
@@ -215,25 +207,31 @@ async def update_objects(payload: RealtorPayload):
         matched_prev_items = set()
 
         for item in items_list:
-            insurance = item.state
+            if not isinstance(item, dict): continue
+            
+            i_slot = item.get("slot")
+            i_hid = item.get("house_id")
+            i_pd = item.get("payday")
+            i_type = item.get("type")
+            insurance = item.get("state")
             matched_prev = None
 
-            if item.house_id and (item.type, "hid", item.house_id) in last_scan_items:
-                matched_prev = last_scan_items[(item.type, "hid", item.house_id)]
-            elif hours_diff == 0 and (item.type, "slot", item.slot) in last_scan_items:
-                prev = last_scan_items[(item.type, "slot", item.slot)]
-                if prev["payday"] == item.payday: matched_prev = prev
+            if i_hid and (i_type, "hid", i_hid) in last_scan_items:
+                matched_prev = last_scan_items[(i_type, "hid", i_hid)]
+            elif hours_diff == 0 and (i_type, "slot", i_slot) in last_scan_items:
+                prev = last_scan_items[(i_type, "slot", i_slot)]
+                if prev["payday"] == i_pd: matched_prev = prev
             elif hours_diff > 0:
-                candidate = last_scan_items.get((item.type, "slot", item.slot))
+                candidate = last_scan_items.get((i_type, "slot", i_slot))
                 if candidate and id(candidate) not in matched_prev_items:
-                    drop = candidate["payday"] - item.payday
-                    expected_rates = [1, 2] if item.type == "Дом" else [1, 2, 4]
+                    drop = candidate["payday"] - i_pd
+                    expected_rates = [1, 2] if i_type == "Дом" else [1, 2, 4]
                     if any(drop == rate * hours_diff for rate in expected_rates): matched_prev = candidate
                 if not matched_prev:
-                    expected_rates = [1, 2] if item.type == "Дом" else [1, 2, 4]
+                    expected_rates = [1, 2] if i_type == "Дом" else [1, 2, 4]
                     for rate in expected_rates:
-                        old_needed_pd = item.payday + (rate * hours_diff)
-                        candidates = last_scan_by_pd.get((item.type, old_needed_pd), [])
+                        old_needed_pd = i_pd + (rate * hours_diff)
+                        candidates = last_scan_by_pd.get((i_type, old_needed_pd), [])
                         for cand in candidates:
                             if id(cand) not in matched_prev_items:
                                 matched_prev = cand
@@ -245,9 +243,9 @@ async def update_objects(payload: RealtorPayload):
                 if matched_prev.get("insurance") and matched_prev["insurance"] != "Неизвестно":
                     insurance = matched_prev["insurance"]
                 elif hours_diff > 0:
-                    pd_diff = matched_prev["payday"] - item.payday
+                    pd_diff = matched_prev["payday"] - i_pd
                     drop_speed = pd_diff / hours_diff
-                    if item.type == "Бизнес":
+                    if i_type == "Бизнес":
                         if drop_speed >= 3.0: insurance = "Нестрах, Без занятости"
                         elif drop_speed >= 1.5: insurance = "Страх, Незанят"
                         elif drop_speed >= 0.8: insurance = "Страх, Занят"
@@ -256,20 +254,20 @@ async def update_objects(payload: RealtorPayload):
                         if drop_speed >= 1.5: insurance = "Нестрах"
                         elif drop_speed >= 0.8: insurance = "Страх"
                         else: insurance = "Неизвестно"
-            else:
-                if not insurance: insurance = "Неизвестно"
+            
+            if not insurance: insurance = "Неизвестно"
 
             is_frozen = 0
             prev_pd_val = matched_prev["payday"] if matched_prev else None
-            
             if hours_diff >= 1 and prev_pd_val is not None:
-                if item.payday == prev_pd_val:
+                if i_pd == prev_pd_val:
                     is_frozen = 1
                 else:
                     is_frozen = 0
 
-            fall_time = calculate_fall_time(str(payload.server_id), item.type, item.payday, insurance, now)
+            fall_time = calculate_fall_time(str(payload.server_id), i_type, i_pd, insurance, now)
 
+            # house_id = excluded.house_id ПЕРЕЗАПИСЫВАЕТ ID, чтобы старые ID не висели при смене сезона
             cursor.execute("""
                 INSERT INTO server_objects (
                     server_id, server_name, season, obj_type, slot, house_id, 
@@ -285,9 +283,9 @@ async def update_objects(payload: RealtorPayload):
                     exact_fall_time = excluded.exact_fall_time,
                     last_updated = excluded.last_updated,
                     is_frozen = excluded.is_frozen
-            """, (str(payload.server_id), payload.server_name, active_season, item.type, item.slot, item.house_id, item.payday, insurance, fall_time, now_str, is_frozen))
+            """, (str(payload.server_id), payload.server_name, active_season, i_type, i_slot, i_hid, i_pd, insurance, fall_time, now_str, is_frozen))
 
-            cursor.execute("INSERT INTO scan_history (server_id, slot, obj_type, payday, recorded_at) VALUES (?, ?, ?, ?, ?)", (str(payload.server_id), item.slot, item.type, item.payday, now_str))
+            cursor.execute("INSERT INTO scan_history (server_id, slot, obj_type, payday, recorded_at) VALUES (?, ?, ?, ?, ?)", (str(payload.server_id), i_slot, i_type, i_pd, now_str))
 
         conn.commit()
         conn.close()
