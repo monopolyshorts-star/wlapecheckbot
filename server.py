@@ -2,10 +2,10 @@ import sqlite3
 import re
 import math
 from datetime import datetime, timedelta, timezone
-from typing import List, Optional, Any
+from typing import List, Optional, Any, Union, Dict
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from database import DB_NAME, init_db
 
 app = FastAPI(title="Arizona Tracker API")
@@ -46,7 +46,16 @@ class RealtorPayload(BaseModel):
     server_name: str
     season: Optional[str] = "Неизвестно"
     scan_ts: Optional[float] = None
-    items: List[RealtorItem]
+    # Принимаем и список [], и пустой Lua-словарь {}
+    items: Union[List[RealtorItem], Dict[Any, Any]] = []
+
+    @field_validator("items", mode="before")
+    @classmethod
+    def convert_empty_dict_to_list(cls, v):
+        # Если Lua прислал пустую таблицу как {}, превращаем её в []
+        if isinstance(v, dict):
+            return []
+        return v
 
 SERVER_RULES = {
     "01": {"h_ins": 2, "h_un": 3, "b_ins": 2, "b_un": 3},
@@ -126,7 +135,8 @@ def calculate_fall_time(server_id: str, obj_type: str, payday_val: int, insuranc
 @app.post("/api/update")
 async def update_objects(payload: RealtorPayload):
     try:
-        print(f"[API] Пакет от {payload.server_name} [{payload.server_id}], объектов: {len(payload.items)}", flush=True)
+        items_list = payload.items if isinstance(payload.items, list) else []
+        print(f"[API] Пакет от {payload.server_name} [{payload.server_id}], объектов: {len(items_list)}", flush=True)
         conn = sqlite3.connect(DB_NAME)
         cursor = conn.cursor()
         
@@ -142,7 +152,7 @@ async def update_objects(payload: RealtorPayload):
         active_season = m_season[0] if m_season and m_season[0] else payload.season
 
         # Полная очистка, если риелторка пуста
-        if len(payload.items) == 0:
+        if len(items_list) == 0:
             cursor.execute("DELETE FROM server_objects WHERE server_id = ?", (str(payload.server_id),))
             cursor.execute("INSERT INTO scan_history (server_id, slot, obj_type, payday, recorded_at) VALUES (?, 0, 'Пусто', 0, ?)", (str(payload.server_id), now_str))
             conn.commit()
@@ -179,7 +189,7 @@ async def update_objects(payload: RealtorPayload):
             except Exception as e:
                 print(f"[History Load Error] {e}", flush=True)
 
-        distinct_types = set(item.type for item in payload.items)
+        distinct_types = set(item.type for item in items_list)
         for obj_type in distinct_types:
             cursor.execute("""
                 SELECT MAX(last_updated) FROM server_objects 
@@ -197,14 +207,14 @@ async def update_objects(payload: RealtorPayload):
                     print(f"[Paged Check Error] {e}", flush=True)
 
             if not is_paged_scan:
-                type_slots = [item.slot for item in payload.items if item.type == obj_type]
+                type_slots = [item.slot for item in items_list if item.type == obj_type]
                 if type_slots:
                     placeholders = ",".join("?" for _ in type_slots)
                     cursor.execute(f"DELETE FROM server_objects WHERE server_id = ? AND obj_type = ? AND slot NOT IN ({placeholders})", [str(payload.server_id), obj_type] + type_slots)
 
         matched_prev_items = set()
 
-        for item in payload.items:
+        for item in items_list:
             insurance = item.state
             matched_prev = None
 
@@ -260,7 +270,6 @@ async def update_objects(payload: RealtorPayload):
 
             fall_time = calculate_fall_time(str(payload.server_id), item.type, item.payday, insurance, now)
 
-            # ПЕРЕЗАПИСЬ house_id: если в игре (Неизвестно), то house_id=None
             cursor.execute("""
                 INSERT INTO server_objects (
                     server_id, server_name, season, obj_type, slot, house_id, 
@@ -283,7 +292,7 @@ async def update_objects(payload: RealtorPayload):
         conn.commit()
         conn.close()
         print(f"[API УСПЕХ] Сервер {payload.server_name} обновлен!", flush=True)
-        return {"status": "success", "count": len(payload.items)}
+        return {"status": "success", "count": len(items_list)}
     except Exception as e:
         print(f"[API КРИТИЧЕСКАЯ ОШИБКА] {e}", flush=True)
         return JSONResponse(status_code=500, content={"status": "error", "message": str(e)})
