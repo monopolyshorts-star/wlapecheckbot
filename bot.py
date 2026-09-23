@@ -161,10 +161,9 @@ def fetch_rows(where="", params=()):
 
 
 # -------------------------------------------------------------
-# БЛИЖАЙШИЕ / ВСЕ СЛЁТЫ (Показывает всё, где есть точное время, кроме замороженных)
+# БЛИЖАЙШИЕ СЛЁТЫ
 # -------------------------------------------------------------
 def format_falls(rows, header_title):
-    # Теперь показываются и объекты с "Неизвестно", если время слёта рассчитано (exact_fall_time != None)
     known_rows = [r for r in rows if r[8] and r[9] != 1]
 
     if not known_rows:
@@ -237,7 +236,6 @@ def format_falls(rows, header_title):
                     is_last_item = (i_idx == len(sorted_items) - 1)
                     
                     i_branch = "                       └─" if is_last_item else "                       ├─"
-                    # Выводим id только если он реально есть в текущем сезоне
                     label = f"id {house_id}" if house_id else f"pos {slot}"
                     body_lines.append(f"{i_branch}{label} (PayDay: {payday}) - {info}")
 
@@ -248,8 +246,117 @@ def format_falls(rows, header_title):
 
 
 # -------------------------------------------------------------
-# ПО СЕРВЕРУ (Формат: pos/id (PayDay: X) - Статус | ЧЧ:00)
-# Прошедшие слёты автоматически отфильтровываются
+# ВСЕ СЛЁТЫ С ПАГИНАЦИЕЙ (ПО 3 ЧАСА НА СТРАНИЦУ)
+# -------------------------------------------------------------
+def get_all_falls_markup(page: int, total_pages: int):
+    nav_row = []
+    if page > 1:
+        nav_row.append(InlineKeyboardButton(text="◀️ Назад", callback_data=f"all_page:{page-1}"))
+    nav_row.append(InlineKeyboardButton(text=f"Стр. {page}/{total_pages}", callback_data="noop"))
+    if page < total_pages:
+        nav_row.append(InlineKeyboardButton(text="Вперед ▶️", callback_data=f"all_page:{page+1}"))
+    return InlineKeyboardMarkup(inline_keyboard=[nav_row])
+
+
+def format_all_falls_paged(page: int = 1):
+    now = (datetime.now(timezone.utc) + timedelta(hours=3)).replace(tzinfo=None)
+    limit = now + timedelta(hours=24)
+    rows = fetch_rows("is_frozen = 0 AND exact_fall_time BETWEEN ? AND ?", (now.isoformat(), limit.isoformat()))
+    
+    known_rows = [r for r in rows if r[8] and r[9] != 1]
+
+    if not known_rows:
+        return "📋 <b>Все слёты за 24 часа</b>\n\n⚠️ Точно известных активных слётов не обнаружено.", None
+
+    conn = db()
+    manual_dict = dict(conn.execute("SELECT server_id, season FROM manual_seasons").fetchall())
+    conn.close()
+
+    grouped = {}
+    total_houses = 0
+    total_biz = 0
+
+    for row in known_rows:
+        (
+            server_name, server_id, season, obj_type, slot, house_id, payday, 
+            status, fall_time, frozen, is_h2, is_estate
+        ) = row
+
+        if not fall_time: continue
+        try:
+            dt = datetime.fromisoformat(fall_time)
+        except: continue
+
+        if obj_type == "Дом": total_houses += 1
+        elif obj_type == "Бизнес": total_biz += 1
+
+        active_season = manual_dict.get(str(server_id)) or season or "Неизвестно"
+        hour_key = dt.strftime("%H:00")
+        
+        hour_dict = grouped.setdefault(hour_key, {})
+        srv_dict = hour_dict.setdefault((server_id, server_name, active_season), {"Дом": [], "Бизнес": []})
+        srv_dict[obj_type].append(row)
+
+    sorted_hours = sorted(grouped.keys())
+    if not sorted_hours:
+        return "📋 <b>Все слёты за 24 часа</b>\n\n⚠️ Активных слётов не обнаружено.", None
+
+    hours_per_page = 3
+    total_pages = math.ceil(len(sorted_hours) / hours_per_page)
+    
+    if page < 1: page = 1
+    if page > total_pages: page = total_pages
+
+    page_hours = sorted_hours[(page-1)*hours_per_page : page*hours_per_page]
+
+    top_header = f"📋 <b>Все слёты за 24 часа</b> (Стр. {page}/{total_pages})\n🏠×{total_houses} 🏢×{total_biz}"
+    body_lines = []
+
+    for hour in page_hours:
+        body_lines.append(f"└─⚡ Слёты в {hour}:")
+        srv_list = sorted(grouped[hour].items(), key=lambda x: x[0][1])
+
+        several_servers = len(srv_list) > 1
+
+        for s_idx, ((server_id, server_name, season), cat_groups) in enumerate(srv_list):
+            is_last_server = (s_idx == len(srv_list) - 1)
+            
+            s_branch = "       └─" if is_last_server else "       ├─"
+            s_bar = "       │  " if several_servers and not is_last_server else "          "
+
+            icon_emoji = get_season_icon(season)
+            body_lines.append(f"{s_branch}🌐 Сервер {server_name.upper()} {icon_emoji}")
+
+            categories = []
+            if cat_groups["Дом"]: categories.append(("📍 Дома:", cat_groups["Дом"]))
+            if cat_groups["Бизнес"]: categories.append(("⭐ Бизнесы ⭐:", cat_groups["Бизнес"]))
+
+            for c_idx, (cat_title, items) in enumerate(categories):
+                is_last_cat = (c_idx == len(categories) - 1)
+                
+                c_branch = "               └─" if is_last_cat else "               ├─"
+                body_lines.append(f"{c_branch}{cat_title}")
+
+                sorted_items = sorted(items, key=lambda x: x[4])
+                for i_idx, r in enumerate(sorted_items):
+                    slot, house_id, payday, status = r[4], r[5], r[6], r[7]
+                    info = status_name(status)
+                    is_last_item = (i_idx == len(sorted_items) - 1)
+                    
+                    i_branch = "                       └─" if is_last_item else "                       ├─"
+                    label = f"id {house_id}" if house_id else f"pos {slot}"
+                    body_lines.append(f"{i_branch}{label} (PayDay: {payday}) - {info}")
+
+        body_lines.append("")
+
+    quote_content = "\n".join(body_lines).strip()
+    text = f"{top_header}\n<blockquote>{quote_content}</blockquote>"
+    markup = get_all_falls_markup(page, total_pages) if total_pages > 1 else None
+    return text, markup
+
+
+# -------------------------------------------------------------
+# ПО СЕРВЕРУ
 # -------------------------------------------------------------
 def format_server_compact(rows, server_id, server_name):
     conn = db()
@@ -259,17 +366,14 @@ def format_server_compact(rows, server_id, server_name):
     season = m_row[0] if m_row and m_row[0] else (rows[0][2] if rows else "Неизвестно")
     icon = get_season_icon(season)
 
-    # Текущее московское время (UTC+3)
     now_msk = (datetime.now(timezone.utc) + timedelta(hours=3)).replace(tzinfo=None)
 
-    # Фильтруем: оставляем только те объекты, время слёта которых ещё не прошло
     active_rows = []
     for r in rows:
         fall_time = r[8]
         if fall_time:
             try:
                 f_dt = datetime.fromisoformat(fall_time)
-                # Если время слёта уже позади (например, наступило 11:01 при слёте в 11:00), убираем из вывода
                 if f_dt <= now_msk:
                     continue
             except:
@@ -288,7 +392,6 @@ def format_server_compact(rows, server_id, server_name):
         label = f"id {house_id}" if house_id else f"pos {slot}"
         info = status_name(status)
         
-        # Получаем красивое время слёта (например: | 11:00)
         time_part = ""
         if fall_time:
             try:
@@ -420,9 +523,25 @@ async def nearest(message: types.Message):
 @dp.message(F.text.in_({"📋 Все слёты", "Все слёты"}))
 async def all_falls(message: types.Message):
     if not has_access(message.from_user.id): return
-    now = (datetime.now(timezone.utc) + timedelta(hours=3)).replace(tzinfo=None)
-    rows = fetch_rows("is_frozen = 0 AND exact_fall_time BETWEEN ? AND ?", (now.isoformat(), (now + timedelta(hours=24)).isoformat()))
-    await message.answer(format_falls(rows, "📋 <b>Все слёты за 24 часа</b>"), parse_mode="HTML")
+    text, markup = format_all_falls_paged(1)
+    await message.answer(text, reply_markup=markup, parse_mode="HTML")
+
+
+@dp.callback_query(F.data.startswith("all_page:"))
+async def all_falls_page_callback(callback: types.CallbackQuery):
+    if not has_access(callback.from_user.id): return
+    page = int(callback.data.split(":")[1])
+    text, markup = format_all_falls_paged(page)
+    try:
+        await callback.message.edit_text(text, reply_markup=markup, parse_mode="HTML")
+    except Exception:
+        pass
+    await callback.answer()
+
+
+@dp.callback_query(F.data == "noop")
+async def noop_callback(callback: types.CallbackQuery):
+    await callback.answer()
 
 
 @dp.message(F.text.in_({"🌐 По серверу", "По серверу"}))
@@ -528,7 +647,6 @@ async def status_msg(message: types.Message):
 async def wakeup(message: types.Message):
     if not has_access(message.from_user.id): return
     rows = fetch_rows("is_frozen = 0")
-    # Дома и бизнесы с рассчитанным слётом
     known = [r for r in rows if r[8]]
     grouped = {}
     for row in known: grouped.setdefault((row[8], row[1]), []).append(row)
