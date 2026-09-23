@@ -161,10 +161,11 @@ def fetch_rows(where="", params=()):
 
 
 # -------------------------------------------------------------
-# БЛИЖАЙШИЕ / ВСЕ СЛЁТЫ (Только активные, не замороженные)
+# БЛИЖАЙШИЕ / ВСЕ СЛЁТЫ (Показывает всё, где есть точное время, кроме замороженных)
 # -------------------------------------------------------------
 def format_falls(rows, header_title):
-    known_rows = [r for r in rows if r[7] and r[7] != "Неизвестно" and r[9] != 1]
+    # Теперь показываются и объекты с "Неизвестно", если время слёта рассчитано (exact_fall_time != None)
+    known_rows = [r for r in rows if r[8] and r[9] != 1]
 
     if not known_rows:
         return f"{header_title}\n\n⚠️ Точно известных активных слётов не обнаружено."
@@ -236,6 +237,7 @@ def format_falls(rows, header_title):
                     is_last_item = (i_idx == len(sorted_items) - 1)
                     
                     i_branch = "                       └─" if is_last_item else "                       ├─"
+                    # Выводим id только если он реально есть в текущем сезоне
                     label = f"id {house_id}" if house_id else f"pos {slot}"
                     body_lines.append(f"{i_branch}{label} (PayDay: {payday}) - {info}")
 
@@ -246,7 +248,8 @@ def format_falls(rows, header_title):
 
 
 # -------------------------------------------------------------
-# ПО СЕРВЕРУ (Точно как в риелторке, с пометкой 🔒 Заморожен)
+# ПО СЕРВЕРУ (Формат: pos/id (PayDay: X) - Статус | ЧЧ:00)
+# Прошедшие слёты автоматически отфильтровываются
 # -------------------------------------------------------------
 def format_server_compact(rows, server_id, server_name):
     conn = db()
@@ -256,28 +259,56 @@ def format_server_compact(rows, server_id, server_name):
     season = m_row[0] if m_row and m_row[0] else (rows[0][2] if rows else "Неизвестно")
     icon = get_season_icon(season)
 
-    if not rows:
+    # Текущее московское время (UTC+3)
+    now_msk = (datetime.now(timezone.utc) + timedelta(hours=3)).replace(tzinfo=None)
+
+    # Фильтруем: оставляем только те объекты, время слёта которых ещё не прошло
+    active_rows = []
+    for r in rows:
+        fall_time = r[8]
+        if fall_time:
+            try:
+                f_dt = datetime.fromisoformat(fall_time)
+                # Если время слёта уже позади (например, наступило 11:01 при слёте в 11:00), убираем из вывода
+                if f_dt <= now_msk:
+                    continue
+            except:
+                pass
+        active_rows.append(r)
+
+    if not active_rows:
         return f"🌐 <b>Сервер {server_name.upper()}[{server_id}]</b>\n<blockquote>└─ Сезон 🌐 \"<b>{season.upper()}</b>\" {icon}\n\n⚠️ Активных объектов не обнаружено.</blockquote>"
 
     result = [f"└─ Сезон 🌐 \"{season.upper()}\" {icon}"]
-    houses = [r for r in rows if r[3] == "Дом"]
-    businesses = [r for r in rows if r[3] == "Бизнес"]
+    houses = [r for r in active_rows if r[3] == "Дом"]
+    businesses = [r for r in active_rows if r[3] == "Бизнес"]
+
+    def make_entry(r):
+        slot, house_id, payday, status, fall_time, is_frozen = r[4], r[5], r[6], r[7], r[8], r[9]
+        label = f"id {house_id}" if house_id else f"pos {slot}"
+        info = status_name(status)
+        
+        # Получаем красивое время слёта (например: | 11:00)
+        time_part = ""
+        if fall_time:
+            try:
+                f_dt = datetime.fromisoformat(fall_time)
+                time_part = f" | {f_dt.strftime('%H:00')}"
+            except:
+                pass
+                
+        frozen_mark = " (🔒 Заморожен)" if is_frozen == 1 else ""
+        return f"   {label} (PayDay: {payday}) - {info}{time_part}{frozen_mark}"
 
     if houses:
         result.append("└─ 🏠 Дома:")
         for r in sorted(houses, key=lambda x: x[4]):
-            prefix = f"id {r[5]}" if r[5] else f"pos {r[4]}"
-            info = status_name(r[7])
-            frozen_mark = " (🔒 Заморожен)" if r[9] == 1 else ""
-            result.append(f"   {prefix} (PayDay: {r[6]}) - {info}{frozen_mark}")
+            result.append(make_entry(r))
 
     if businesses:
         result.append("└─ ✨ Бизнесы:")
         for r in sorted(businesses, key=lambda x: x[4]):
-            prefix = f"id {r[5]}" if r[5] else f"pos {r[4]}"
-            info = status_name(r[7])
-            frozen_mark = " (🔒 Заморожен)" if r[9] == 1 else ""
-            result.append(f"   {prefix} (PayDay: {r[6]}) - {info}{frozen_mark}")
+            result.append(make_entry(r))
 
     return f"🌐 <b>Сервер {server_name.upper()}</b>\n<blockquote>" + "\n".join(result) + "</blockquote>"
 
@@ -497,7 +528,8 @@ async def status_msg(message: types.Message):
 async def wakeup(message: types.Message):
     if not has_access(message.from_user.id): return
     rows = fetch_rows("is_frozen = 0")
-    known = [r for r in rows if r[7] and r[7] != "Неизвестно"]
+    # Дома и бизнесы с рассчитанным слётом
+    known = [r for r in rows if r[8]]
     grouped = {}
     for row in known: grouped.setdefault((row[8], row[1]), []).append(row)
     selected = []
