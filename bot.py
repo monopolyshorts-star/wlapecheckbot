@@ -419,7 +419,7 @@ def format_server_compact(rows, server_id, server_name):
 @dp.message(Command("start"))
 async def start(message: types.Message):
     if not has_access(message.from_user.id):
-        await message.answer("🔒 У вас нет доступа.")
+        await message.answer(f"🔒 У вас нет доступа. Ваш ID: {message.from_user.id}")
         return
     await message.answer("👋 <b>Arizona Tracker</b>", reply_markup=keyboard(message.from_user.id), parse_mode="HTML")
 
@@ -513,7 +513,9 @@ async def revoke_user(message: types.Message):
 # -------------------------------------------------------------
 @dp.message(F.text.in_({"⚠️ Ближайшие слёты", "Ближайшие слёты"}))
 async def nearest(message: types.Message):
-    if not has_access(message.from_user.id): return
+    if not has_access(message.from_user.id): 
+        await message.answer(f"🔒 У вас нет доступа. Ваш ID: {message.from_user.id}")
+        return
     now = (datetime.now(timezone.utc) + timedelta(hours=3)).replace(tzinfo=None)
     limit = now + timedelta(hours=3)
     rows = fetch_rows("is_frozen = 0 AND exact_fall_time BETWEEN ? AND ?", (now.isoformat(), limit.isoformat()))
@@ -522,7 +524,9 @@ async def nearest(message: types.Message):
 
 @dp.message(F.text.in_({"📋 Все слёты", "Все слёты"}))
 async def all_falls(message: types.Message):
-    if not has_access(message.from_user.id): return
+    if not has_access(message.from_user.id): 
+        await message.answer(f"🔒 У вас нет доступа. Ваш ID: {message.from_user.id}")
+        return
     text, markup = format_all_falls_paged(1)
     await message.answer(text, reply_markup=markup, parse_mode="HTML")
 
@@ -657,6 +661,7 @@ async def wakeup(message: types.Message):
 
 
 async def main():
+    await bot.delete_webhook(drop_pending_updates=True)
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
