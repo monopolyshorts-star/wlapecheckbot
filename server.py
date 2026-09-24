@@ -88,8 +88,11 @@ def calculate_fall_time(server_id: str, obj_type: str, payday_val: int, insuranc
         is_biz = (obj_type == "Бизнес")
 
         if is_biz:
-            if insurance_status in ["Нестрах, Без занятости", "Нестрах", "Не страх, Без занят"]:
+            if insurance_status in ["Не страх, Без занят", "Нестрах, Без занятости", "Нестрах", "Не страх, Без занят"]:
                 drop_per_hour = 4
+                target_pd = rules["b_un"]
+            elif insurance_status in ["Страх, Без занят", "Страх, Незанят"]:
+                drop_per_hour = 2
                 target_pd = rules["b_un"]
             elif insurance_status in ["Страх, Занят", "Страх, есть занятость"]:
                 drop_per_hour = 1
@@ -98,7 +101,7 @@ def calculate_fall_time(server_id: str, obj_type: str, payday_val: int, insuranc
                 drop_per_hour = 2
                 target_pd = rules["b_un"]
         else:
-            if insurance_status in ["Нестрах", "Не страх"]:
+            if insurance_status in ["Не страх", "Нестрах"]:
                 drop_per_hour = 2
                 target_pd = rules["h_un"]
             else:
@@ -247,12 +250,12 @@ async def update_objects(payload: RealtorPayload):
                     candidate = last_scan_items.get((i_type, "slot", i_slot))
                     if candidate and id(candidate) not in matched_prev_items:
                         drop = candidate["payday"] - i_pd
-                        expected_rates = [1, 2] if i_type == "Дом" else [1, 2, 4]
+                        expected_rates = [1, 2, 4] if i_type == "Бизнес" else [1, 2]
                         if any(drop == rate * hours_diff for rate in expected_rates) or drop == 0: 
                             matched_prev = candidate
                     
                     if not matched_prev:
-                        expected_rates = [1, 2] if i_type == "Дом" else [1, 2, 4]
+                        expected_rates = [1, 2, 4] if i_type == "Бизнес" else [1, 2]
                         for rate in expected_rates + [0]: 
                             old_needed_pd = i_pd + (rate * hours_diff)
                             candidates = last_scan_by_pd.get((i_type, old_needed_pd), [])
@@ -278,7 +281,7 @@ async def update_objects(payload: RealtorPayload):
                     if row_ins and row_ins[0] and row_ins[0] != "Неизвестно":
                         old_insurance = row_ins[0]
 
-                # ТОЧНЫЙ РАСЧЁТ СТРАХОВКИ ПО СКОРОСТИ СЛЁТА (ПРИОРИТЕТ 1)
+                # ТОЧНЫЙ РАСЧЁТ СТРАХОВКИ ПО СКОРОСТИ СЛЁТА
                 if hours_diff > 0 and matched_prev:
                     pd_diff = matched_prev["payday"] - i_pd
                     if pd_diff > 0:
