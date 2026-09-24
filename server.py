@@ -142,7 +142,6 @@ async def update_objects(payload: RealtorPayload):
         m_season = cursor.fetchone()
         active_season = m_season[0] if m_season and m_season[0] else payload.season
 
-        # УМНАЯ ОЧИСТКА ТОЛЬКО ПУСТОГО РАЗДЕЛА (Дома ИЛИ Бизнесы)
         if len(items_list) == 0:
             target_del_type = payload.scan_type or "Дом"
             cursor.execute("DELETE FROM server_objects WHERE server_id = ? AND obj_type = ?", (str(payload.server_id), target_del_type))
@@ -235,7 +234,7 @@ async def update_objects(payload: RealtorPayload):
                 i_hid = item.get("house_id")
                 i_pd = item.get("payday")
                 i_type = item.get("type")
-                insurance = item.get("state")
+                insurance = "Неизвестно"
                 matched_prev = None
 
                 if i_hid and (i_type, "hid", i_hid) in last_scan_items:
@@ -264,7 +263,7 @@ async def update_objects(payload: RealtorPayload):
                             if matched_prev: 
                                 break
 
-                # Ищем предыдущую запись в БД напрямую, если не нашли через историю
+                # Ищем ранее сохранённую страховку
                 old_insurance = None
                 if matched_prev:
                     matched_prev_items.add(id(matched_prev))
@@ -279,39 +278,29 @@ async def update_objects(payload: RealtorPayload):
                     if row_ins and row_ins[0] and row_ins[0] != "Неизвестно":
                         old_insurance = row_ins[0]
 
-                if old_insurance and old_insurance != "Неизвестно":
-                    insurance = old_insurance
-                elif hours_diff > 0 and matched_prev:
+                # ТОЧНЫЙ РАСЧЁТ СТРАХОВКИ ПО СКОРОСТИ СЛЁТА (ПРИОРИТЕТ 1)
+                if hours_diff > 0 and matched_prev:
                     pd_diff = matched_prev["payday"] - i_pd
-                    drop_speed = pd_diff / hours_diff
-                    if i_type == "Бизнес":
-                        if drop_speed >= 3.0: insurance = "Нестрах, Без занятости"
-                        elif drop_speed >= 1.5: insurance = "Страх, Без занят"
-                        elif drop_speed >= 0.8: insurance = "Страх, Занят"
-                        else: insurance = "Неизвестно"
-                    else:
-                        if drop_speed >= 1.5: insurance = "Нестрах"
-                        elif drop_speed >= 0.8: insurance = "Страх"
-                        else: insurance = "Неизвестно"
-                else:
-                    # Если данных нет, пытаемся угадать по правилам сервера для текущего payday
-                    sid = str(payload.server_id).zfill(2)
-                    rules = SERVER_RULES.get(sid, SERVER_RULES["01"])
-                    if i_type == "Дом":
-                        if i_pd == rules["h_ins"]:
-                            insurance = "Страх"
-                        elif i_pd == rules["h_un"]:
-                            insurance = "Нестрах"
+                    if pd_diff > 0:
+                        drop_speed = pd_diff / hours_diff
+                        if i_type == "Бизнес":
+                            if drop_speed >= 3.0:
+                                insurance = "Не страх, Без занят"
+                            elif drop_speed >= 1.5:
+                                insurance = "Страх, Без занят"
+                            elif drop_speed >= 0.5:
+                                insurance = "Страх, Занят"
                         else:
-                            insurance = "Неизвестно"
-                    else:
-                        if i_pd == rules["b_ins"]:
-                            insurance = "Страх, Занят"
-                        elif i_pd == rules["b_un"]:
-                            insurance = "Нестрах, Без занятости"
-                        else:
-                            insurance = "Неизвестно"
+                            if drop_speed >= 1.5:
+                                insurance = "Не страх"
+                            elif drop_speed >= 0.5:
+                                insurance = "Страх"
 
+                # Если по разнице PayDay определить не удалось — берём ранее подтвержденный статус
+                if insurance == "Неизвестно" and old_insurance and old_insurance != "Неизвестно":
+                    insurance = old_insurance
+
+                # Вычисляем заморозку
                 is_frozen = 0
                 prev_pd_val = matched_prev["payday"] if matched_prev else None
                 if hours_diff >= 1 and prev_pd_val is not None:
