@@ -39,7 +39,7 @@ class RealtorPayload(BaseModel):
     server_name: str
     season: Optional[str] = "Неизвестно"
     scan_ts: Optional[float] = None
-    scan_type: Optional[str] = None # 'Дом' или 'Бизнес'
+    scan_type: Optional[str] = None
     items: Any = []
 
 SERVER_RULES = {
@@ -85,28 +85,22 @@ def calculate_fall_time(server_id: str, obj_type: str, payday_val: int, insuranc
     try:
         sid = str(server_id).zfill(2)
         rules = SERVER_RULES.get(sid, SERVER_RULES["01"])
-        is_biz = (obj_type == "Бизнес")
+        is_biz = obj_type == "Бизнес"
 
         if is_biz:
-            if insurance_status in ["Не страх, Без занят", "Нестрах, Без занятости", "Нестрах", "Не страх, Без занят"]:
-                drop_per_hour = 4
-                target_pd = rules["b_un"]
-            elif insurance_status in ["Страх, Без занят", "Страх, Незанят"]:
-                drop_per_hour = 2
-                target_pd = rules["b_un"]
-            elif insurance_status in ["Страх, Занят", "Страх, есть занятость"]:
-                drop_per_hour = 1
-                target_pd = rules["b_ins"]
+            if insurance_status == "Не страх, Без занят":
+                drop_per_hour, target_pd = 4, rules["b_un"]
+            elif insurance_status == "Страх, Без занят":
+                drop_per_hour, target_pd = 2, rules["b_un"]
+            elif insurance_status == "Страх, Занят":
+                drop_per_hour, target_pd = 1, rules["b_ins"]
             else:
-                drop_per_hour = 2
-                target_pd = rules["b_un"]
+                drop_per_hour, target_pd = 2, rules["b_un"]
         else:
-            if insurance_status in ["Не страх", "Нестрах"]:
-                drop_per_hour = 2
-                target_pd = rules["h_un"]
+            if insurance_status == "Не страх":
+                drop_per_hour, target_pd = 2, rules["h_un"]
             else:
-                drop_per_hour = 1
-                target_pd = rules["h_ins"]
+                drop_per_hour, target_pd = 1, rules["h_ins"]
 
         if payday_val <= target_pd:
             hours_to_wait = 1
@@ -114,236 +108,166 @@ def calculate_fall_time(server_id: str, obj_type: str, payday_val: int, insuranc
             hours_to_wait = math.ceil((payday_val - target_pd) / drop_per_hour) + 1
 
         next_payday = (update_time + timedelta(hours=1)).replace(minute=0, second=0, microsecond=0)
-        fall_time = next_payday + timedelta(hours=hours_to_wait - 1)
-        return fall_time.isoformat()
+        return (next_payday + timedelta(hours=hours_to_wait - 1)).isoformat()
     except Exception as e:
         print(f"[Calc Error] {e}", flush=True)
         return None
+
+def classify_insurance(obj_type, previous_pd, current_pd, hours_diff):
+    if not hours_diff or previous_pd is None:
+        return "Неизвестно"
+    drop = previous_pd - current_pd
+    speed = drop / hours_diff
+    if speed <= 0:
+        return "Неизвестно"
+    if obj_type == "Дом":
+        return "Не страх" if speed >= 1.5 else "Страх"
+    if speed >= 3.0:
+        return "Не страх, Без занят"
+    if speed >= 1.5:
+        return "Страх, Без занят"
+    return "Страх, Занят"
 
 @app.post("/api/update")
 async def update_objects(payload: RealtorPayload):
     try:
         raw_items = payload.items
-        items_list = []
         if isinstance(raw_items, list):
             items_list = raw_items
-        elif isinstance(raw_items, dict) and len(raw_items) > 0:
-            items_list = list(raw_items.values())
-        
-        print(f"[API] Пакет от {payload.server_name} [{payload.server_id}], тип: {payload.scan_type}, объектов: {len(items_list)}", flush=True)
+        elif isinstance(raw_items, dict):
+            items_list = list(raw_items.values()) if raw_items else []
+        else:
+            items_list = []
+
+        server_id = str(payload.server_id)
+        print(f"[API] Пакет от {payload.server_name} [{server_id}], тип: {payload.scan_type}, объектов: {len(items_list)}", flush=True)
+
         conn = sqlite3.connect(DB_NAME)
         cursor = conn.cursor()
-        
+
         if payload.scan_ts:
             now = (datetime.fromtimestamp(payload.scan_ts, tz=timezone.utc) + timedelta(hours=3)).replace(tzinfo=None)
         else:
             now = (datetime.now(timezone.utc) + timedelta(hours=3)).replace(tzinfo=None)
-            
         now_str = now.strftime("%d.%m.%Y %H:%M:%S")
 
-        cursor.execute("SELECT season FROM manual_seasons WHERE server_id = ?", (str(payload.server_id),))
-        m_season = cursor.fetchone()
-        active_season = m_season[0] if m_season and m_season[0] else payload.season
+        row = cursor.execute("SELECT season FROM manual_seasons WHERE server_id = ?", (server_id,)).fetchone()
+        active_season = row[0] if row and row[0] else payload.season
 
-        if len(items_list) == 0:
-            target_del_type = payload.scan_type or "Дом"
-            cursor.execute("DELETE FROM server_objects WHERE server_id = ? AND obj_type = ?", (str(payload.server_id), target_del_type))
-            cursor.execute("INSERT INTO scan_history (server_id, slot, obj_type, payday, recorded_at) VALUES (?, 0, ?, 0, ?)", (str(payload.server_id), f"Пусто_{target_del_type}", now_str))
+        if not items_list:
+            target_type = payload.scan_type or "Дом"
+            cursor.execute("DELETE FROM server_objects WHERE server_id = ? AND obj_type = ?", (server_id, target_type))
+            cursor.execute("INSERT INTO scan_history (server_id, slot, obj_type, payday, recorded_at) VALUES (?, 0, ?, 0, ?)", (server_id, f"Пусто_{target_type}", now_str))
             conn.commit()
             conn.close()
-            print(f"[API УСПЕХ] Раздел '{target_del_type}' на сервере {payload.server_name} успешно очищен!", flush=True)
             return {"status": "success", "count": 0}
 
-        grouped_by_type = {}
+        grouped = {}
         for item in items_list:
-            if isinstance(item, dict):
-                grouped_by_type.setdefault(item.get("type"), []).append(item)
+            if isinstance(item, dict) and item.get("type"):
+                grouped.setdefault(item["type"], []).append(item)
 
-        for obj_type, type_items in grouped_by_type.items():
-            cursor.execute("""
-                SELECT DISTINCT recorded_at FROM scan_history 
-                WHERE server_id = ? AND obj_type = ? 
-                ORDER BY id DESC LIMIT 10
-            """, (str(payload.server_id), obj_type))
-            history_rows = cursor.fetchall()
+        for obj_type, type_items in grouped.items():
+            histories = cursor.execute("""
+                SELECT DISTINCT recorded_at FROM scan_history
+                WHERE server_id = ? AND obj_type = ?
+                ORDER BY id DESC LIMIT 20
+            """, (server_id, obj_type)).fetchall()
 
-            last_time_str = None
-            last_dt = None
-            for (h_time_str,) in history_rows:
+            # Берём предыдущий час, а не повторный быстрый просмотр текущего часа.
+            previous_time = None
+            previous_dt = None
+            for (time_str,) in histories:
                 try:
-                    h_dt = datetime.strptime(h_time_str, "%d.%m.%Y %H:%M:%S")
-                    if (now - h_dt).total_seconds() >= 180:
-                        last_time_str = h_time_str
-                        last_dt = h_dt
+                    dt = datetime.strptime(time_str, "%d.%m.%Y %H:%M:%S")
+                    diff = (now.replace(minute=0, second=0, microsecond=0) - dt.replace(minute=0, second=0, microsecond=0)).total_seconds() / 3600
+                    if diff >= 1:
+                        previous_time, previous_dt = time_str, dt
                         break
-                except:
+                except ValueError:
                     continue
 
-            last_scan_items = {}
-            last_scan_by_pd = {}
+            previous = {}
             hours_diff = 0
+            if previous_time and previous_dt:
+                hours_diff = int(round((get_payday_slot_hour(now) - get_payday_slot_hour(previous_dt)).total_seconds() / 3600))
+                cursor.execute("""
+                    SELECT sh.slot, sh.payday, so.house_id, so.insurance_status
+                    FROM scan_history sh
+                    LEFT JOIN server_objects so
+                      ON so.server_id = sh.server_id AND so.slot = sh.slot AND so.obj_type = sh.obj_type
+                    WHERE sh.server_id = ? AND sh.obj_type = ? AND sh.recorded_at = ?
+                """, (server_id, obj_type, previous_time))
+                for slot, pd, hid, ins in cursor.fetchall():
+                    previous[slot] = {"payday": pd, "house_id": hid, "insurance": ins or "Неизвестно"}
 
-            if last_time_str and last_dt:
+            # При новом полном скане раздела удаляем только исчезнувшие позиции.
+            cursor.execute("SELECT MAX(last_updated) FROM server_objects WHERE server_id = ? AND obj_type = ?", (server_id, obj_type))
+            last_update = cursor.fetchone()[0]
+            paged = False
+            if last_update:
                 try:
-                    diff_hours_calc = int(round((get_payday_slot_hour(now) - get_payday_slot_hour(last_dt)).total_seconds() / 3600.0))
-                    hours_diff = diff_hours_calc if 1 <= diff_hours_calc <= 24 else 0
-
-                    cursor.execute("""
-                        SELECT sh.slot, sh.obj_type, sh.payday, so.house_id, so.insurance_status
-                        FROM scan_history sh
-                        LEFT JOIN server_objects so ON sh.server_id = so.server_id AND sh.slot = so.slot AND sh.obj_type = so.obj_type
-                        WHERE sh.server_id = ? AND sh.obj_type = ? AND sh.recorded_at = ?
-                    """, (str(payload.server_id), obj_type, last_time_str))
-                    for prev_slot_num, prev_type, prev_pd, prev_hid, prev_ins in cursor.fetchall():
-                        item_dict = {
-                            "slot": prev_slot_num, 
-                            "type": prev_type, 
-                            "payday": prev_pd, 
-                            "house_id": prev_hid, 
-                            "insurance": prev_ins or "Неизвестно"
-                        }
-                        if prev_hid: 
-                            last_scan_items[(prev_type, "hid", prev_hid)] = item_dict
-                        last_scan_items[(prev_type, "slot", prev_slot_num)] = item_dict
-                        last_scan_by_pd.setdefault((prev_type, prev_pd), []).append(item_dict)
-                except Exception as e:
-                    print(f"[History Load Error {obj_type}] {e}", flush=True)
-
-            cursor.execute("""
-                SELECT MAX(last_updated) FROM server_objects 
-                WHERE server_id = ? AND obj_type = ?
-            """, (str(payload.server_id), obj_type))
-            last_up_row = cursor.fetchone()
-            
-            is_paged_scan = False
-            if last_up_row and last_up_row[0]:
-                try:
-                    last_up_dt = datetime.strptime(last_up_row[0], "%d.%m.%Y %H:%M:%S")
-                    if (now - last_up_dt).total_seconds() < 60:
-                        is_paged_scan = True
-                except Exception as e:
-                    print(f"[Paged Check Error] {e}", flush=True)
-
-            if not is_paged_scan:
-                type_slots = [item.get("slot") for item in type_items]
-                if type_slots:
-                    placeholders = ",".join("?" for _ in type_slots)
-                    cursor.execute(f"DELETE FROM server_objects WHERE server_id = ? AND obj_type = ? AND slot NOT IN ({placeholders})", [str(payload.server_id), obj_type] + type_slots)
-
-            matched_prev_items = set()
+                    paged = (now - datetime.strptime(last_update, "%d.%m.%Y %H:%M:%S")).total_seconds() < 60
+                except ValueError:
+                    pass
+            if not paged:
+                slots = [x.get("slot") for x in type_items]
+                placeholders = ",".join("?" for _ in slots)
+                cursor.execute(f"DELETE FROM server_objects WHERE server_id = ? AND obj_type = ? AND slot NOT IN ({placeholders})", [server_id, obj_type] + slots)
 
             for item in type_items:
-                i_slot = item.get("slot")
-                i_hid = item.get("house_id")
-                i_pd = item.get("payday")
-                i_type = item.get("type")
-                insurance = "Неизвестно"
-                matched_prev = None
+                slot = item.get("slot")
+                current_pd = item.get("payday")
+                old = previous.get(slot)
 
-                if i_hid and (i_type, "hid", i_hid) in last_scan_items:
-                    matched_prev = last_scan_items[(i_type, "hid", i_hid)]
-                elif hours_diff == 0 and (i_type, "slot", i_slot) in last_scan_items:
-                    prev = last_scan_items[(i_type, "slot", i_slot)]
-                    if prev["payday"] == i_pd: 
-                        matched_prev = prev
-                elif hours_diff > 0:
-                    candidate = last_scan_items.get((i_type, "slot", i_slot))
-                    if candidate and id(candidate) not in matched_prev_items:
-                        drop = candidate["payday"] - i_pd
-                        expected_rates = [1, 2, 4] if i_type == "Бизнес" else [1, 2]
-                        if any(drop == rate * hours_diff for rate in expected_rates) or drop == 0: 
-                            matched_prev = candidate
-                    
-                    if not matched_prev:
-                        expected_rates = [1, 2, 4] if i_type == "Бизнес" else [1, 2]
-                        for rate in expected_rates + [0]: 
-                            old_needed_pd = i_pd + (rate * hours_diff)
-                            candidates = last_scan_by_pd.get((i_type, old_needed_pd), [])
-                            for cand in candidates:
-                                if id(cand) not in matched_prev_items:
-                                    matched_prev = cand
-                                    break
-                            if matched_prev: 
-                                break
+                insurance = classify_insurance(
+                    obj_type,
+                    old["payday"] if old else None,
+                    current_pd,
+                    hours_diff,
+                )
 
-                # Ищем ранее сохранённую страховку
-                old_insurance = None
-                if matched_prev:
-                    matched_prev_items.add(id(matched_prev))
-                    old_insurance = matched_prev.get("insurance")
-                
-                if not old_insurance or old_insurance == "Неизвестно":
-                    cursor.execute("""
-                        SELECT insurance_status FROM server_objects 
+                # В текущем часовом повторном скане сохраняем уже определённый статус.
+                if insurance == "Неизвестно":
+                    old_db = cursor.execute("""
+                        SELECT insurance_status FROM server_objects
                         WHERE server_id = ? AND slot = ? AND obj_type = ?
-                    """, (str(payload.server_id), i_slot, i_type))
-                    row_ins = cursor.fetchone()
-                    if row_ins and row_ins[0] and row_ins[0] != "Неизвестно":
-                        old_insurance = row_ins[0]
+                    """, (server_id, slot, obj_type)).fetchone()
+                    if old_db and old_db[0] and old_db[0] != "Неизвестно":
+                        insurance = old_db[0]
 
-                # ТОЧНЫЙ РАСЧЁТ СТРАХОВКИ ПО СКОРОСТИ СЛЁТА
-                if hours_diff > 0 and matched_prev:
-                    pd_diff = matched_prev["payday"] - i_pd
-                    if pd_diff > 0:
-                        drop_speed = pd_diff / hours_diff
-                        if i_type == "Бизнес":
-                            if drop_speed >= 3.0:
-                                insurance = "Не страх, Без занят"
-                            elif drop_speed >= 1.5:
-                                insurance = "Страх, Без занят"
-                            elif drop_speed >= 0.5:
-                                insurance = "Страх, Занят"
-                        else:
-                            if drop_speed >= 1.5:
-                                insurance = "Не страх"
-                            elif drop_speed >= 0.5:
-                                insurance = "Страх"
-
-                # Если по разнице PayDay определить не удалось — берём ранее подтвержденный статус
-                if insurance == "Неизвестно" and old_insurance and old_insurance != "Неизвестно":
-                    insurance = old_insurance
-
-                # Вычисляем заморозку
-                is_frozen = 0
-                prev_pd_val = matched_prev["payday"] if matched_prev else None
-                if hours_diff >= 1 and prev_pd_val is not None:
-                    if i_pd == prev_pd_val:
-                        is_frozen = 1
-                    else:
-                        is_frozen = 0
-                elif hours_diff == 0 and matched_prev is not None:
-                    cursor.execute("""
-                        SELECT is_frozen FROM server_objects 
+                frozen = 1 if old and hours_diff >= 1 and current_pd == old["payday"] else 0
+                if hours_diff == 0:
+                    old_frozen = cursor.execute("""
+                        SELECT is_frozen FROM server_objects
                         WHERE server_id = ? AND slot = ? AND obj_type = ?
-                    """, (str(payload.server_id), i_slot, i_type))
-                    row_fr = cursor.fetchone()
-                    if row_fr:
-                        is_frozen = row_fr[0]
+                    """, (server_id, slot, obj_type)).fetchone()
+                    frozen = old_frozen[0] if old_frozen else 0
 
-                fall_time = calculate_fall_time(str(payload.server_id), i_type, i_pd, insurance, now)
+                fall_time = calculate_fall_time(server_id, obj_type, current_pd, insurance, now)
+                house_id = item.get("house_id")
 
                 cursor.execute("""
-                    INSERT INTO server_objects (
-                        server_id, server_name, season, obj_type, slot, house_id, 
-                        payday, insurance_status, exact_fall_time, last_updated, 
-                        is_frozen, is_h2, is_estate
-                    )
+                    INSERT INTO server_objects
+                    (server_id, server_name, season, obj_type, slot, house_id, payday,
+                     insurance_status, exact_fall_time, last_updated, is_frozen, is_h2, is_estate)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0)
                     ON CONFLICT(server_id, slot, obj_type) DO UPDATE SET
-                        payday = excluded.payday,
-                        house_id = excluded.house_id,
-                        insurance_status = excluded.insurance_status,
+                        server_name = excluded.server_name,
                         season = excluded.season,
+                        house_id = excluded.house_id,
+                        payday = excluded.payday,
+                        insurance_status = excluded.insurance_status,
                         exact_fall_time = excluded.exact_fall_time,
                         last_updated = excluded.last_updated,
                         is_frozen = excluded.is_frozen
-                """, (str(payload.server_id), payload.server_name, active_season, i_type, i_slot, i_hid, i_pd, insurance, fall_time, now_str, is_frozen))
+                """, (server_id, payload.server_name, active_season, obj_type, slot, house_id,
+                      current_pd, insurance, fall_time, now_str, frozen))
 
-                cursor.execute("INSERT INTO scan_history (server_id, slot, obj_type, payday, recorded_at) VALUES (?, ?, ?, ?, ?)", (str(payload.server_id), i_slot, i_type, i_pd, now_str))
+                cursor.execute("INSERT INTO scan_history (server_id, slot, obj_type, payday, recorded_at) VALUES (?, ?, ?, ?, ?)", (server_id, slot, obj_type, current_pd, now_str))
 
         conn.commit()
         conn.close()
-        print(f"[API УСПЕХ] Сервер {payload.server_name} обновлен!", flush=True)
         return {"status": "success", "count": len(items_list)}
     except Exception as e:
         print(f"[API КРИТИЧЕСКАЯ ОШИБКА] {e}", flush=True)
