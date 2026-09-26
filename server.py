@@ -89,16 +89,30 @@ def parse_scan_time(value):
 
 
 def calculate_fall_time(server_id: str, obj_type: str, payday: int, insurance: str, now: datetime):
-    # При PayDay == 1 слетает ровно в следующий час гарантированно
+    sid = str(server_id).zfill(2)
+    rules = SERVER_RULES.get(sid, SERVER_RULES["01"])
+    next_payday = (now + timedelta(hours=1)).replace(minute=0, second=0, microsecond=0)
+
+    # Гарантированный слёт в следующий час:
+    # 1. При 1 PayDay (слетает всегда при любых правилах)
     if payday <= 1:
-        next_payday = (now + timedelta(hours=1)).replace(minute=0, second=0, microsecond=0)
         return next_payday.isoformat()
 
-    # Если статус Неизвестно и PayDay > 1 — точное время определить нельзя
+    # 2. Если статус ещё Неизвестно, но payday попадает в порог гарантированного слёта для сервера:
     if insurance == "Неизвестно":
+        if obj_type == "Дом":
+            # Если порог слета со страховкой на сервере равен 2, то при 2 PD дом слетит гарантированно
+            # (если он без страховки — упал бы ещё раньше при 2/3 PD)
+            min_target = min(rules["h_ins"], rules["h_un"])
+            if payday <= min_target:
+                return next_payday.isoformat()
+        else:
+            min_target = min(rules["b_ins"], rules["b_un"])
+            if payday <= min_target:
+                return next_payday.isoformat()
         return None
 
-    rules = SERVER_RULES.get(str(server_id).zfill(2), SERVER_RULES["01"])
+    # При известном статусе страховки:
     if obj_type == "Бизнес":
         if insurance == "Не страх, Без занят":
             rate, target = 4, rules["b_un"]
@@ -117,7 +131,6 @@ def calculate_fall_time(server_id: str, obj_type: str, payday: int, insurance: s
             return None
 
     hours_left = 1 if payday <= target else math.ceil((payday - target) / rate) + 1
-    next_payday = (now + timedelta(hours=1)).replace(minute=0, second=0, microsecond=0)
     return (next_payday + timedelta(hours=hours_left - 1)).isoformat()
 
 
@@ -198,7 +211,7 @@ async def update_objects(payload: RealtorPayload):
                 prior_dt = None
                 hours = 0
 
-                # 1. Поиск предыдущего скана по house_id (если ID дома известен)
+                # 1. Поиск предыдущего скана по house_id
                 if hid is not None:
                     hid_rows = cur.execute("""
                         SELECT sh.payday, sh.recorded_at
@@ -211,7 +224,6 @@ async def update_objects(payload: RealtorPayload):
                         hist_dt = parse_scan_time(hist_time)
                         if hist_dt:
                             diff_sec = (now - hist_dt).total_seconds()
-                            # Только между 50 минутами и 3 часами
                             if 50 * 60 <= diff_sec <= 3.5 * 3600:
                                 prior_pd = hist_pd
                                 prior_dt = hist_dt
@@ -231,14 +243,12 @@ async def update_objects(payload: RealtorPayload):
                         hist_dt = parse_scan_time(hist_time)
                         if hist_dt:
                             diff_sec = (now - hist_dt).total_seconds()
-                            # Строго предыдущий PayDay (от 50 до 110 минут назад)
                             if 50 * 60 <= diff_sec <= 110 * 60:
                                 prior_pd = hist_pd
                                 prior_dt = hist_dt
                                 hours = 1
                                 break
 
-                # Предыдущая запись из БД
                 current_db = cur.execute("""
                     SELECT payday, insurance_status, is_frozen, last_updated, house_id
                     FROM server_objects WHERE server_id=? AND slot=? AND obj_type=?
@@ -246,7 +256,7 @@ async def update_objects(payload: RealtorPayload):
 
                 status = classify_status(obj_type, prior_pd, new_pd, hours)
 
-                # Наследуем подтверждённый статус только если это тот же самый объект
+                # Наследуем подтверждённый статус только если это тот же объект
                 if status == "Неизвестно" and current_db and current_db[1] and current_db[1] != "Неизвестно":
                     same_obj = False
                     if hid is not None and current_db[4] == hid:
