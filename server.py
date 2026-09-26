@@ -72,14 +72,6 @@ def read_root():
     return {"status": "online", "service": "Arizona Tracker API is running"}
 
 
-class RealtorItem(BaseModel):
-    slot: int
-    house_id: Optional[int] = None
-    payday: int
-    type: str
-    state: Optional[str] = None
-
-
 class RealtorPayload(BaseModel):
     server_id: Any
     server_name: str
@@ -97,6 +89,15 @@ def parse_scan_time(value):
 
 
 def calculate_fall_time(server_id: str, obj_type: str, payday: int, insurance: str, now: datetime):
+    # При PayDay == 1 слетает ровно в следующий час гарантированно
+    if payday <= 1:
+        next_payday = (now + timedelta(hours=1)).replace(minute=0, second=0, microsecond=0)
+        return next_payday.isoformat()
+
+    # Если статус Неизвестно и PayDay > 1 — точное время определить нельзя
+    if insurance == "Неизвестно":
+        return None
+
     rules = SERVER_RULES.get(str(server_id).zfill(2), SERVER_RULES["01"])
     if obj_type == "Бизнес":
         if insurance == "Не страх, Без занят":
@@ -106,12 +107,14 @@ def calculate_fall_time(server_id: str, obj_type: str, payday: int, insurance: s
         elif insurance == "Страх, Занят":
             rate, target = 1, rules["b_ins"]
         else:
-            rate, target = 2, rules["b_un"]
+            return None
     else:
         if insurance == "Не страх":
             rate, target = 2, rules["h_un"]
-        else:
+        elif insurance == "Страх":
             rate, target = 1, rules["h_ins"]
+        else:
+            return None
 
     hours_left = 1 if payday <= target else math.ceil((payday - target) / rate) + 1
     next_payday = (now + timedelta(hours=1)).replace(minute=0, second=0, microsecond=0)
@@ -121,16 +124,25 @@ def calculate_fall_time(server_id: str, obj_type: str, payday: int, insurance: s
 def classify_status(obj_type: str, old_pd: Optional[int], new_pd: int, hours: int) -> str:
     if old_pd is None or hours < 1:
         return "Неизвестно"
-    speed = (old_pd - new_pd) / hours
-    if speed <= 0:
+    drop = old_pd - new_pd
+    if drop <= 0:
         return "Неизвестно"
+    speed = drop / hours
+
     if obj_type == "Дом":
-        return "Не страх" if speed >= 1.5 else "Страх"
-    if speed >= 3.0:
-        return "Не страх, Без занят"
-    if speed >= 1.5:
-        return "Страх, Без занят"
-    return "Страх, Занят"
+        if speed >= 1.5:
+            return "Не страх"
+        elif speed >= 0.5:
+            return "Страх"
+        return "Неизвестно"
+    else:
+        if speed >= 3.0:
+            return "Не страх, Без занят"
+        elif speed >= 1.5:
+            return "Страх, Без занят"
+        elif speed >= 0.5:
+            return "Страх, Занят"
+        return "Неизвестно"
 
 
 def normalize_items(raw):
@@ -152,19 +164,17 @@ async def update_objects(payload: RealtorPayload):
         else:
             now = (datetime.now(timezone.utc) + timedelta(hours=3)).replace(tzinfo=None)
         now_str = now.strftime("%d.%m.%Y %H:%M:%S")
-        print(f"[API] {payload.server_name} [{server_id}], scan_type={payload.scan_type}, items={len(items)}", flush=True)
 
         conn = sqlite3.connect(DB_NAME)
         cur = conn.cursor()
         manual = cur.execute("SELECT season FROM manual_seasons WHERE server_id=?", (server_id,)).fetchone()
         season = manual[0] if manual and manual[0] else payload.season
 
-        # Пустой раздел очищает только явно указанный тип, не весь сервер.
         if not items:
             target_type = payload.scan_type if payload.scan_type in ("Дом", "Бизнес") else None
             if target_type is None:
                 conn.close()
-                return JSONResponse(status_code=400, content={"status": "error", "message": "Для пустого списка требуется scan_type Дом/Бизнес"})
+                return JSONResponse(status_code=400, content={"status": "error", "message": "Требуется scan_type Дом/Бизнес"})
             cur.execute("DELETE FROM server_objects WHERE server_id=? AND obj_type=?", (server_id, target_type))
             cur.execute("INSERT INTO scan_history (server_id,slot,obj_type,payday,recorded_at) VALUES (?,0,?,0,?)",
                         (server_id, f"Пусто_{target_type}", now_str))
@@ -179,70 +189,86 @@ async def update_objects(payload: RealtorPayload):
                 grouped.setdefault(typ, []).append(item)
 
         for obj_type, type_items in grouped.items():
-            # Для текущего объекта ищем последний снимок не моложе 50 минут.
-            # Так несколько чеков в одном PayDay не создают ложную заморозку.
             for item in type_items:
                 slot = int(item["slot"])
                 new_pd = int(item["payday"])
                 hid = item.get("house_id")
 
-                prior_rows = cur.execute("""
-                    SELECT payday, recorded_at
-                    FROM scan_history
-                    WHERE server_id=? AND slot=? AND obj_type=?
-                    ORDER BY id DESC LIMIT 30
-                """, (server_id, slot, obj_type)).fetchall()
-
                 prior_pd = None
                 prior_dt = None
-                for hist_pd, hist_time in prior_rows:
-                    hist_dt = parse_scan_time(hist_time)
-                    if hist_dt and (now - hist_dt).total_seconds() >= 50 * 60:
-                        prior_pd, prior_dt = hist_pd, hist_dt
-                        break
-
                 hours = 0
-                if prior_dt:
-                    hours = int(round((now.replace(minute=0, second=0, microsecond=0) - prior_dt.replace(minute=0, second=0, microsecond=0)).total_seconds() / 3600))
-                    if hours < 1 or hours > 24:
-                        hours = 0
 
-                # Если история по позиции не нашлась, пытаемся сопоставить по house_id.
-                if prior_pd is None and hid is not None:
+                # 1. Поиск предыдущего скана по house_id (если ID дома известен)
+                if hid is not None:
                     hid_rows = cur.execute("""
                         SELECT sh.payday, sh.recorded_at
                         FROM scan_history sh
                         JOIN server_objects so ON so.server_id=sh.server_id AND so.slot=sh.slot AND so.obj_type=sh.obj_type
                         WHERE sh.server_id=? AND sh.obj_type=? AND so.house_id=?
-                        ORDER BY sh.id DESC LIMIT 30
+                        ORDER BY sh.id DESC LIMIT 20
                     """, (server_id, obj_type, hid)).fetchall()
                     for hist_pd, hist_time in hid_rows:
                         hist_dt = parse_scan_time(hist_time)
-                        if hist_dt and (now - hist_dt).total_seconds() >= 50 * 60:
-                            prior_pd, prior_dt = hist_pd, hist_dt
-                            hours = int(round((now.replace(minute=0, second=0, microsecond=0) - hist_dt.replace(minute=0, second=0, microsecond=0)).total_seconds() / 3600))
-                            if hours < 1 or hours > 24:
-                                hours = 0
-                            break
+                        if hist_dt:
+                            diff_sec = (now - hist_dt).total_seconds()
+                            # Только между 50 минутами и 3 часами
+                            if 50 * 60 <= diff_sec <= 3.5 * 3600:
+                                prior_pd = hist_pd
+                                prior_dt = hist_dt
+                                hours = max(1, int(round(diff_sec / 3600)))
+                                break
 
-                # Предыдущее состояние из основной таблицы нужно для повторного скана в тот же час.
+                # 2. Если по house_id не нашли — ищем строго в предыдущем часе (50–110 минут назад)
+                if prior_pd is None:
+                    prior_rows = cur.execute("""
+                        SELECT payday, recorded_at
+                        FROM scan_history
+                        WHERE server_id=? AND slot=? AND obj_type=?
+                        ORDER BY id DESC LIMIT 20
+                    """, (server_id, slot, obj_type)).fetchall()
+
+                    for hist_pd, hist_time in prior_rows:
+                        hist_dt = parse_scan_time(hist_time)
+                        if hist_dt:
+                            diff_sec = (now - hist_dt).total_seconds()
+                            # Строго предыдущий PayDay (от 50 до 110 минут назад)
+                            if 50 * 60 <= diff_sec <= 110 * 60:
+                                prior_pd = hist_pd
+                                prior_dt = hist_dt
+                                hours = 1
+                                break
+
+                # Предыдущая запись из БД
                 current_db = cur.execute("""
-                    SELECT payday, insurance_status, is_frozen, last_updated
+                    SELECT payday, insurance_status, is_frozen, last_updated, house_id
                     FROM server_objects WHERE server_id=? AND slot=? AND obj_type=?
                 """, (server_id, slot, obj_type)).fetchone()
 
                 status = classify_status(obj_type, prior_pd, new_pd, hours)
-                if status == "Неизвестно" and current_db and current_db[1] and current_db[1] != "Неизвестно":
-                    status = current_db[1]
 
+                # Наследуем подтверждённый статус только если это тот же самый объект
+                if status == "Неизвестно" and current_db and current_db[1] and current_db[1] != "Неизвестно":
+                    same_obj = False
+                    if hid is not None and current_db[4] == hid:
+                        same_obj = True
+                    elif hid is None and current_db[3]:
+                        db_dt = parse_scan_time(current_db[3])
+                        if db_dt and (now - db_dt).total_seconds() <= 90 * 60 and new_pd <= current_db[0]:
+                            same_obj = True
+                    if same_obj:
+                        status = current_db[1]
+
+                # Заморозка
                 frozen = 0
                 if prior_pd is not None and hours >= 1:
                     frozen = int(new_pd == prior_pd)
                 elif current_db:
-                    # Повторный просмотр в том же PayDay сохраняет флаг; не создает новый.
-                    frozen = int(current_db[2] or 0) if new_pd == current_db[0] else 0
+                    db_dt = parse_scan_time(current_db[3])
+                    if db_dt and (now - db_dt).total_seconds() < 50 * 60 and new_pd == current_db[0]:
+                        frozen = int(current_db[2] or 0)
 
                 fall_time = calculate_fall_time(server_id, obj_type, new_pd, status, now)
+
                 cur.execute("""
                     INSERT INTO server_objects
                     (server_id,server_name,season,obj_type,slot,house_id,payday,insurance_status,
@@ -257,12 +283,12 @@ async def update_objects(payload: RealtorPayload):
                         exact_fall_time=excluded.exact_fall_time,
                         last_updated=excluded.last_updated,
                         is_frozen=excluded.is_frozen
-                """, (server_id,payload.server_name,season,obj_type,slot,hid,new_pd,status,fall_time,now_str,frozen))
+                """, (server_id, payload.server_name, season, obj_type, slot, hid, new_pd, status, fall_time, now_str, frozen))
                 cur.execute("INSERT INTO scan_history (server_id,slot,obj_type,payday,recorded_at) VALUES (?,?,?,?,?)",
-                            (server_id,slot,obj_type,new_pd,now_str))
+                            (server_id, slot, obj_type, new_pd, now_str))
 
-            # Очистка исчезнувших позиций только при полном скане; быстрые страницы склеиваем.
-            cur.execute("SELECT MAX(last_updated) FROM server_objects WHERE server_id=? AND obj_type=?", (server_id,obj_type))
+            # Удаление позиций при полном скане
+            cur.execute("SELECT MAX(last_updated) FROM server_objects WHERE server_id=? AND obj_type=?", (server_id, obj_type))
             last_updated = cur.fetchone()[0]
             is_paged = False
             if last_updated:
@@ -271,7 +297,7 @@ async def update_objects(payload: RealtorPayload):
             if not is_paged:
                 slots = sorted({int(x["slot"]) for x in type_items})
                 marks = ",".join("?" for _ in slots)
-                cur.execute(f"DELETE FROM server_objects WHERE server_id=? AND obj_type=? AND slot NOT IN ({marks})", [server_id,obj_type,*slots])
+                cur.execute(f"DELETE FROM server_objects WHERE server_id=? AND obj_type=? AND slot NOT IN ({marks})", [server_id, obj_type, *slots])
 
         conn.commit()
         conn.close()
@@ -281,4 +307,4 @@ async def update_objects(payload: RealtorPayload):
             conn.rollback()
             conn.close()
         print(f"[API ERROR] {exc}", flush=True)
-        return JSONResponse(status_code=500, content={"status":"error","message":str(exc)})
+        return JSONResponse(status_code=500, content={"status": "error", "message": str(exc)})
