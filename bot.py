@@ -117,14 +117,12 @@ def status_name(value):
         return "Неизвестно"
     v = str(value).strip()
     mapping = {
-        # Дома
         "Страх": "Страх",
         "Застраховано": "Страх",
         "Нестрах": "Не страх",
         "Не страх": "Не страх",
         "Не застраховано": "Не страх",
         
-        # Бизнесы
         "Страх, Занят": "Страх, Занят",
         "Застраховано, есть занятость": "Страх, Занят",
         "Страх, есть занятость": "Страх, Занят",
@@ -180,7 +178,11 @@ def fetch_rows(where="", params=()):
 # БЛИЖАЙШИЕ СЛЁТЫ
 # -------------------------------------------------------------
 def format_falls(rows, header_title):
-    known_rows = [r for r in rows if r[8] and r[9] != 1]
+    # Неизвестно показываем ТОЛЬКО если PayDay == 1 (так как при 1 PD слёт 100% в следующий час)
+    known_rows = [
+        r for r in rows 
+        if r[8] and r[9] != 1 and (status_name(r[7]) != "Неизвестно" or r[6] == 1)
+    ]
 
     if not known_rows:
         return f"{header_title}\n\n⚠️ Точно известных активных слётов не обнаружено."
@@ -223,15 +225,11 @@ def format_falls(rows, header_title):
     for hour in sorted(grouped.keys()):
         body_lines.append(f"└─⚡ Слёты в {hour}:")
         srv_list = sorted(grouped[hour].items(), key=lambda x: x[0][1])
-
         several_servers = len(srv_list) > 1
 
         for s_idx, ((server_id, server_name, season), cat_groups) in enumerate(srv_list):
             is_last_server = (s_idx == len(srv_list) - 1)
-            
             s_branch = "       └─" if is_last_server else "       ├─"
-            s_bar = "       │  " if several_servers and not is_last_server else "          "
-
             icon_emoji = get_season_icon(season)
             body_lines.append(f"{s_branch}🌐 Сервер {server_name.upper()} {icon_emoji}")
 
@@ -241,7 +239,6 @@ def format_falls(rows, header_title):
 
             for c_idx, (cat_title, items) in enumerate(categories):
                 is_last_cat = (c_idx == len(categories) - 1)
-                
                 c_branch = "               └─" if is_last_cat else "               ├─"
                 body_lines.append(f"{c_branch}{cat_title}")
 
@@ -250,7 +247,6 @@ def format_falls(rows, header_title):
                     slot, house_id, payday, status = r[4], r[5], r[6], r[7]
                     info = status_name(status)
                     is_last_item = (i_idx == len(sorted_items) - 1)
-                    
                     i_branch = "                       └─" if is_last_item else "                       ├─"
                     label = f"id {house_id}" if house_id else f"pos {slot}"
                     body_lines.append(f"{i_branch}{label} (PayDay: {payday}) - {info}")
@@ -279,7 +275,11 @@ def format_all_falls_paged(page: int = 1):
     limit = now + timedelta(hours=24)
     rows = fetch_rows("is_frozen = 0 AND exact_fall_time BETWEEN ? AND ?", (now.isoformat(), limit.isoformat()))
     
-    known_rows = [r for r in rows if r[8] and r[9] != 1]
+    # Исключаем Неизвестно (кроме 1 PD)
+    known_rows = [
+        r for r in rows 
+        if r[8] and r[9] != 1 and (status_name(r[7]) != "Неизвестно" or r[6] == 1)
+    ]
 
     if not known_rows:
         return "📋 <b>Все слёты за 24 часа</b>\n\n⚠️ Точно известных активных слётов не обнаружено.", None
@@ -332,14 +332,9 @@ def format_all_falls_paged(page: int = 1):
         body_lines.append(f"└─⚡ Слёты в {hour}:")
         srv_list = sorted(grouped[hour].items(), key=lambda x: x[0][1])
 
-        several_servers = len(srv_list) > 1
-
         for s_idx, ((server_id, server_name, season), cat_groups) in enumerate(srv_list):
             is_last_server = (s_idx == len(srv_list) - 1)
-            
             s_branch = "       └─" if is_last_server else "       ├─"
-            s_bar = "       │  " if several_servers and not is_last_server else "          "
-
             icon_emoji = get_season_icon(season)
             body_lines.append(f"{s_branch}🌐 Сервер {server_name.upper()} {icon_emoji}")
 
@@ -349,7 +344,6 @@ def format_all_falls_paged(page: int = 1):
 
             for c_idx, (cat_title, items) in enumerate(categories):
                 is_last_cat = (c_idx == len(categories) - 1)
-                
                 c_branch = "               └─" if is_last_cat else "               ├─"
                 body_lines.append(f"{c_branch}{cat_title}")
 
@@ -358,7 +352,6 @@ def format_all_falls_paged(page: int = 1):
                     slot, house_id, payday, status = r[4], r[5], r[6], r[7]
                     info = status_name(status)
                     is_last_item = (i_idx == len(sorted_items) - 1)
-                    
                     i_branch = "                       └─" if is_last_item else "                       ├─"
                     label = f"id {house_id}" if house_id else f"pos {slot}"
                     body_lines.append(f"{i_branch}{label} (PayDay: {payday}) - {info}")
@@ -667,7 +660,10 @@ async def status_msg(message: types.Message):
 async def wakeup(message: types.Message):
     if not has_access(message.from_user.id): return
     rows = fetch_rows("is_frozen = 0")
-    known = [r for r in rows if r[8]]
+    known = [
+        r for r in rows 
+        if r[8] and (status_name(r[7]) != "Неизвестно" or r[6] == 1)
+    ]
     grouped = {}
     for row in known: grouped.setdefault((row[8], row[1]), []).append(row)
     selected = []
